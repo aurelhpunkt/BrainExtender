@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrainExtender - Lokaler Gemini Chat & Vektorgedächtnis</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Icons (FontAwesome or simple local symbols, using standard Lucide-icons CDN or inline SVGs) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Code Syntax Highlighting CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Chart.js for Dashboard -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <i class="fa-solid fa-brain logo-icon"></i>
+          <h1>BrainExtender</h1>
+        </div>
+      </div>
+      
+      <button class="btn btn-primary btn-new-chat" id="btn-new-chat" style="margin-bottom: 0.5rem;">
+        <i class="fa-solid fa-plus"></i> Neuer Chat
+      </button>
+      <button class="btn btn-secondary btn-dashboard" id="btn-dashboard">
+        <i class="fa-solid fa-chart-pie"></i> Dashboard
+      </button>
+      
+      <div class="chats-list-container">
+        <h3>UNTERHALTUNGEN</h3>
+        <ul class="chats-list" id="chats-list">
+          <!-- Dynamic Chats list -->
+        </ul>
+      </div>
+      
+      <!-- Vector Memory Status Widget -->
+      <div class="vector-status-widget">
+        <div class="widget-header">
+          <div class="status-indicator">
+            <span class="status-dot online"></span>
+            <span class="status-text">Lokales Gedächtnis</span>
+          </div>
+          <i class="fa-solid fa-database db-icon"></i>
+        </div>
+        <div class="widget-stats">
+          <span class="stat-number" id="memory-count">0</span>
+          <span class="stat-label">Erinnerungen gespeichert</span>
+        </div>
+      </div>
+      
+      <div class="sidebar-footer">
+        <button class="footer-btn" id="btn-open-memory" title="Langzeitgedächtnis verwalten">
+          <i class="fa-solid fa-memory"></i>
+          <span>Gedächtnis</span>
+        </button>
+        <button class="footer-btn" id="btn-open-import" title="Chats importieren">
+          <i class="fa-solid fa-file-import"></i>
+          <span>Import</span>
+        </button>
+        <button class="footer-btn" id="btn-open-settings" title="Einstellungen">
+          <i class="fa-solid fa-gear"></i>
+          <span>Settings</span>
+        </button>
+      </div>
+    </aside>
+    
+    <!-- MAIN WORKSPACE -->
+    <main class="main-workspace">
+      
+      <!-- DASHBOARD STATE -->
+      <section class="workspace-state" id="state-dashboard">
+        <div class="dashboard-header">
+          <h2>CEO Dashboard</h2>
+          <p>Dein strategischer Überblick & Multi-Agenten Boardroom</p>
+        </div>
+        
+        <div class="dashboard-grid">
+          <!-- Charts -->
+          <div class="dashboard-card card-finance">
+            <h3><i class="fa-solid fa-coins"></i> Finanzen</h3>
+            <div class="chart-container">
+              <canvas id="financeChart"></canvas>
+            </div>
+          </div>
+          <div class="dashboard-card card-fitness">
+            <h3><i class="fa-solid fa-dumbbell"></i> Fitness & Gesundheit</h3>
+            <div class="chart-container">
+              <canvas id="fitnessChart"></canvas>
+            </div>
+          </div>
+          <div class="dashboard-card card-coaching">
+            <h3><i class="fa-solid fa-bullseye"></i> Coaching Metriken</h3>
+            <div class="chart-container">
+              <canvas id="coachingChart"></canvas>
+            </div>
+          </div>
+          
+          <!-- Insights -->
+          <div class="dashboard-card card-insights">
+            <h3><i class="fa-solid fa-lightbulb"></i> Kernaussagen & Erkenntnisse</h3>
+            <ul class="insights-list" id="dashboard-insights">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+          
+          <!-- Mindset -->
+          <div class="dashboard-card card-mindset">
+            <h3><i class="fa-solid fa-brain"></i> Mindset Übersicht</h3>
+            <ul class="insights-list" id="dashboard-mindset">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+          
+          <!-- Termine -->
+          <div class="dashboard-card card-appointments">
+            <h3><i class="fa-solid fa-calendar-day"></i> Anstehende Termine (7 Tage)</h3>
+            <ul class="insights-list" id="dashboard-appointments">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+          
+          <!-- ToDos -->
+          <div class="dashboard-card card-todos">
+            <h3><i class="fa-solid fa-list-check"></i> ToDo-Liste</h3>
+            <ul class="insights-list" id="dashboard-todos">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+        </div>
+
+        <!-- CEO Boardroom -->
+        <div class="boardroom-section mt-3">
+          <h3><i class="fa-solid fa-users-viewfinder"></i> CEO Boardroom</h3>
+          <p class="text-muted">Stelle eine strategische Frage und wähle deine Spezialisten für eine multiperspektivische Analyse.</p>
+          
+          <div class="boardroom-controls">
+            <textarea id="boardroom-question" placeholder="Z.B. 'Sollten wir unseren Fokus auf Hochpreis-Angebote verlagern?'" class="boardroom-input"></textarea>
+            <div class="boardroom-role-selection" id="boardroom-role-selection">
+              <!-- Checkboxes dynamically populated from available roles -->
+            </div>
+            <button id="btn-boardroom-consult" class="btn btn-primary">
+              <i class="fa-solid fa-bolt"></i> Spezialisten konsultieren
+            </button>
+          </div>
+          
+          <div id="boardroom-results" class="boardroom-results-grid">
+            <!-- Results populated here -->
+          </div>
+        </div>
+      </section>
+
+      <!-- CONFIGURATION STATE (NEW CHAT SETUP) -->
+      <section class="workspace-state active" id="state-welcome">
+        <div class="welcome-cost-wrapper">
+          <div class="cost-badge" id="welcome-cost-display" title="Gesamte API-Kosten in AI Studio (kumuliert)">
+            <i class="fa-solid fa-wallet cost-icon"></i>
+            <span>Kosten: $<span id="welcome-cost-value">0.0000</span></span>
+          </div>
+        </div>
+        <div class="welcome-container">
+          <div class="welcome-header">
+            <i class="fa-solid fa-brain welcome-logo"></i>
+            <h2>Hallo! Ich bin dein BrainExtender</h2>
+            <p>Konfiguriere deinen neuen Chat. Wähle eine Spezialisierung und Tonalität, um das Verhalten anzupassen.</p>
+          </div>
+          
+          <div class="setup-form-card">
+            <!-- 1. Specialization Cards -->
+            <div class="setup-section">
+              <div class="section-header-flex" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <h4 style="margin-bottom: 0;">1. Spezialisierung (Rolle)</h4>
+                <button class="btn btn-secondary btn-sm" id="btn-manage-roles" style="padding: 6px 12px; font-size: 11px;">
+                  <i class="fa-solid fa-sliders"></i> Rollen verwalten
+                </button>
+              </div>
+              <div class="role-grid" id="setup-role-grid">
+                <!-- Dynamically loaded role cards will appear here -->
+              </div>
+            </div>
+            
+            <!-- 2. Tone Selector -->
+            <div class="setup-section">
+              <h4>2. Tonalität & Stil</h4>
+              <div class="tone-grid">
+                <div class="preset-card active" data-tone="neutral">
+                  <div class="preset-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+                  <h5>Sachlich</h5>
+                  <p>Konstruktive, neutrale und strukturierte Antworten.</p>
+                </div>
+                <div class="preset-card" data-tone="analyse">
+                  <div class="preset-icon"><i class="fa-solid fa-bolt"></i></div>
+                  <h5>Knallharte Analyse</h5>
+                  <p>Nimmt deine Thesen kritisch auseinander und sucht nach Schwachstellen.</p>
+                </div>
+                <div class="preset-card" data-tone="motivation">
+                  <div class="preset-icon"><i class="fa-solid fa-sun"></i></div>
+                  <h5>Motivierend</h5>
+                  <p>Fokus auf Chancen, Lösungen und stärkendes Feedback.</p>
+                </div>
+                <div class="preset-card" data-tone="unbestechlich">
+                  <div class="preset-icon"><i class="fa-solid fa-handshake-simple-slash"></i></div>
+                  <h5>Unbestechlich</h5>
+                  <p>Kommuniziert im direkten 'Du', ehrlich, kaufmännisch unbestechlich, lösungsorientiert.</p>
+                </div>
+              </div>
+            </div>
+            <!-- 3. KI-Modell Selector -->
+            <div class="setup-section">
+              <h4>3. KI-Modell</h4>
+              <div class="form-group" style="max-width: 350px;">
+                <select id="chat-model-select" class="text-input" style="padding: 10px 14px; background-color: var(--color-bg-input);">
+                  <!-- Dynamically populated by JS -->
+                </select>
+              </div>
+            </div>
+            
+            <div class="setup-action-bar">
+              <input type="text" id="chat-title-input" placeholder="Titel des Chats (z.B. IT Beratung)..." class="text-input">
+              <button class="btn btn-primary" id="btn-start-chat">
+                <i class="fa-solid fa-message"></i> Unterhaltung starten
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- CHAT WORKSPACE STATE -->
+      <section class="workspace-state" id="state-chat">
+        <!-- Chat Header -->
+        <header class="chat-header">
+          <div class="chat-title-area">
+            <h2 id="active-chat-title">Chat Name</h2>
+            <div class="chat-badges">
+              <span class="badge clickable" id="badge-role" title="Rolle im laufenden Chat wechseln" style="cursor: pointer;">Standard <i class="fa-solid fa-caret-down" style="margin-left: 4px;"></i></span>
+              <span class="badge" id="badge-tone">Neutral</span>
+              <select id="badge-model" class="model-select-badge">
+                <!-- Dynamically populated by JS -->
+              </select>
+            </div>
+          </div>
+          <div class="chat-header-actions">
+            <button class="btn-icon" id="btn-handover" title="Chat-Kontext an einen anderen Spezialisten übergeben (Briefing generieren)">
+              <i class="fa-solid fa-share-nodes"></i>
+            </button>
+            <div class="cost-badge" id="cost-display" title="Gesamte API-Kosten in AI Studio (kumuliert)">
+              <i class="fa-solid fa-wallet cost-icon"></i>
+              <span>Kosten: $<span id="cost-value">0.0000</span></span>
+            </div>
+            <button class="btn-icon" id="btn-delete-chat" title="Chat löschen">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        </header>
+        
+        <!-- Messages Area -->
+        <div class="messages-container" id="messages-container">
+          <!-- Dynamic Chat messages -->
+        </div>
+        
+        <!-- Input Form Area -->
+        <div class="chat-input-wrapper">
+          <!-- Upload Preview Bar -->
+          <div class="upload-preview-bar" id="upload-preview-bar">
+            <!-- Dynamic upload item tags -->
+          </div>
+          
+          <form class="chat-form" id="chat-form">
+            <!-- Attachment Button & Hidden File Input -->
+            <button type="button" class="btn-icon btn-attach" id="btn-attach" title="Dateien anhängen (Bilder, Dokumente)">
+              <i class="fa-solid fa-paperclip"></i>
+            </button>
+            <input type="file" id="file-input" multiple accept="image/*,application/pdf,text/*" style="display: none;">
+            
+            <textarea id="chat-input" placeholder="Schreibe eine Nachricht an deinen Assistenten..." rows="1"></textarea>
+            
+            <button type="button" class="btn-icon btn-voice" id="btn-handsfree" title="HandsFree (Auto-Senden & Vorlesen)">
+              <i class="fa-solid fa-headset"></i>
+            </button>
+            <button type="button" class="btn-icon btn-voice" id="btn-mic" title="Mikrofon (Diktieren)">
+              <i class="fa-solid fa-microphone"></i>
+            </button>
+            <select id="mic-language" class="btn-icon btn-voice" title="Aufnahme-Sprache erzwingen" style="appearance:none; padding:0 8px; font-weight:bold; font-size:12px; width:auto;">
+              <option value="auto">Auto</option>
+              <option value="ru">RU</option>
+              <option value="de">DE</option>
+              <option value="en">EN</option>
+            </select>
+            <button type="button" class="btn-icon btn-voice" id="btn-speaker" title="Lautsprecher (KI liest vor)">
+              <i class="fa-solid fa-volume-high"></i>
+            </button>
+            <button type="button" class="btn-icon btn-voice-speed" id="btn-voice-speed" title="Sprechgeschwindigkeit">
+              1x
+            </button>
+            <button type="submit" class="btn-send" id="btn-send" title="Nachricht senden">
+              <i class="fa-solid fa-arrow-up"></i>
+            </button>
+            <button type="button" class="btn-send" id="btn-stop" title="Generierung abbrechen" style="display: none; background-color: var(--color-danger);">
+              <i class="fa-solid fa-stop"></i>
+            </button>
+          </form>
+          
+          <!-- Controller Panel (Toggles) -->
+          <div class="input-controllers">
+            <div class="controller-item">
+              <label class="switch-container">
+                <input type="checkbox" id="toggle-memory" checked>
+                <span class="switch-slider"></span>
+              </label>
+              <span class="controller-label" title="Sucht im lokalen Vektorgedächtnis nach relevantem Kontext">Langzeitgedächtnis nutzen</span>
+            </div>
+            
+            <div class="controller-item">
+              <label class="switch-container">
+                <input type="checkbox" id="toggle-learn" checked>
+                <span class="switch-slider"></span>
+              </label>
+              <span class="controller-label" title="Speichert diesen Austausch automatisch im Gedächtnis">Auto-Erinnern (Lernen)</span>
+            </div>
+            
+            <div class="controller-item">
+              <label class="switch-container">
+                <input type="checkbox" id="toggle-vogelperspektive" checked>
+                <span class="switch-slider"></span>
+              </label>
+              <span class="controller-label" title="Bezieht Echtzeit-Finanzdaten aus dem Vogelperspektive-Dashboard ein">Vogelperspektive nutzen</span>
+            </div>
+
+            <div class="controller-item controller-item--web">
+              <label class="switch-container">
+                <input type="checkbox" id="toggle-web-search" checked>
+                <span class="switch-slider switch-slider--web"></span>
+              </label>
+              <span class="controller-label" title="Sucht live im Internet via DuckDuckGo – datenschutzkonform, kein Tracking">
+                <i class="fa-solid fa-globe" style="font-size: 10px; margin-right: 3px;"></i> Web-Recherche
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+    </main>
+    
+  </div>
+
+  <!-- DIALOGS (MODALS) -->
+
+  <!-- 1. SETTINGS MODAL -->
+  <dialog class="modal-dialog" id="modal-settings">
+    <div class="modal-header">
+      <h3>Einstellungen</h3>
+      <button class="btn-close-modal" id="btn-close-settings">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label for="settings-api-key">Google AI Studio API-Key</label>
+        <div class="input-with-button">
+          <input type="password" id="settings-api-key" placeholder="AIzaSy...">
+          <button class="btn btn-secondary" id="btn-save-key">Speichern</button>
+        </div>
+        <p class="help-text">Ihr API-Schlüssel wird lokal in der Datei <code>.env</code> auf Ihrem Rechner gespeichert und niemals an Dritte übertragen.</p>
+      </div>
+      <div class="api-status-box" id="api-status-box">
+        <span class="status-dot offline"></span>
+        <span class="status-text">Kein API-Key konfiguriert</span>
+      </div>
+      
+      <div class="form-group" style="margin-top: 24px; border-top: 1px solid var(--color-border-glass); padding-top: 20px;">
+        <label>Google Kalender Verbindung</label>
+        <p class="help-text" style="margin-bottom: 12px;">Verknüpfen Sie den BrainExtender mit Ihrem Google Kalender, um Termine direkt aus dem Chat eintragen zu lassen.</p>
+        <div id="calendar-connection-container" class="calendar-connection-box">
+          <div class="calendar-status-info">
+            <span class="status-dot offline" id="calendar-status-dot"></span>
+            <span class="status-text" id="calendar-status-text">Prüfe Verbindungsstatus...</span>
+          </div>
+          <div class="calendar-action-buttons" style="margin-top: 10px;">
+            <button class="btn btn-primary" id="btn-connect-calendar" style="display: none; width: 100%;">
+              <i class="fa-brands fa-google"></i> Kalender verbinden
+            </button>
+            <button class="btn btn-danger" id="btn-disconnect-calendar" style="display: none; width: 100%;">
+              <i class="fa-solid fa-link-slash"></i> Verbindung trennen
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 2. MEMORY DASHBOARD MODAL -->
+  <dialog class="modal-dialog modal-large" id="modal-memory">
+    <div class="modal-header">
+      <h3>Langzeitgedächtnis verwalten</h3>
+      <button class="btn-close-modal" id="btn-close-memory">&times;</button>
+    </div>
+    <div class="modal-body flex-column">
+      <div class="memory-search-bar">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="memory-search-input" placeholder="Gedächtnis durchsuchen (z.B. PHP, Lasagne)...">
+        <button class="btn btn-danger" id="btn-clear-all-memory">
+          <i class="fa-solid fa-trash-arrow-up"></i> Alles löschen
+        </button>
+      </div>
+      
+      <div class="memory-list-container">
+        <table class="memory-table">
+          <thead>
+            <tr>
+              <th style="width: 55%;">Erinnerungs-Inhalt</th>
+              <th style="width: 25%;">Quelle</th>
+              <th style="width: 15%;">Datum</th>
+              <th style="width: 5%;">Aktion</th>
+            </tr>
+          </thead>
+          <tbody id="memory-table-body">
+            <!-- Dynamic memory rows -->
+          </tbody>
+        </table>
+        <div class="empty-memory-state" id="empty-memory-msg">
+          <i class="fa-solid fa-ghost"></i>
+          <p>Noch keine Erinnerungen gespeichert oder gefunden.</p>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 3. IMPORT MODAL -->
+  <dialog class="modal-dialog" id="modal-import">
+    <div class="modal-header">
+      <h3>Daten importieren</h3>
+      <button class="btn-close-modal" id="btn-close-import">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="import-intro-text">Importieren Sie Chat-Exporte in das Langzeitgedächtnis: Google Takeout (JSON), HTML-Verläufe, Textdokumente – und jetzt auch <strong>WhatsApp-ZIP-Exporte</strong> inkl. Bilder.</p>
+      
+      <!-- WhatsApp hint -->
+      <div id="whatsapp-hint" class="whatsapp-import-hint" style="display: none;">
+        <i class="fa-brands fa-whatsapp"></i>
+        <div>
+          <strong>WhatsApp-Export erkannt</strong>
+          <p>Sollen die enthaltenen Bilder per Gemini Vision analysiert und beschrieben werden? (dauert länger)</p>
+          <label class="switch-container" style="display: inline-flex; position: relative; width: 36px; height: 20px; margin-top: 6px;">
+            <input type="checkbox" id="toggle-analyze-images">
+            <span class="switch-slider"></span>
+          </label>
+          <span style="font-size: 12px; margin-left: 8px; color: var(--color-text-secondary);">Bilder mit KI analysieren</span>
+        </div>
+      </div>
+
+      <!-- Drag & Drop Zone -->
+      <div class="drag-drop-zone" id="drag-drop-zone">
+        <i class="fa-solid fa-file-arrow-up upload-icon"></i>
+        <p>Datei hierher ziehen oder <span>klicken zum Auswählen</span></p>
+        <p style="font-size: 11px; color: var(--color-text-secondary); margin-top: 6px;">JSON · HTML · TXT · MD · <strong style="color: hsl(142,70%,55%);">ZIP (WhatsApp)</strong></p>
+        <input type="file" id="import-file-input" accept=".json,.html,.htm,.txt,.md,.zip" style="display: none;">
+      </div>
+      
+      <!-- Progress Bar -->
+      <div class="import-progress-container" id="import-progress-container" style="display: none;">
+        <div class="progress-info">
+          <span class="progress-status" id="import-status-text">Analysiere Datei...</span>
+          <span class="progress-percent" id="import-percent-text">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="import-progress-bar" style="width: 0%;"></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+
+  <!-- 4. ROLES MANAGER MODAL -->
+  <dialog class="modal-dialog modal-large" id="modal-roles">
+    <div class="modal-header">
+      <h3>Rollen verwalten</h3>
+      <button class="btn-close-modal" id="btn-close-roles">&times;</button>
+    </div>
+    <div class="modal-body flex-column">
+      <div class="roles-toolbar" style="display: flex; gap: 10px; margin-bottom: 16px; justify-content: space-between; align-items: center;">
+        <span class="help-text">Konfigurieren Sie System-Rollen oder erstellen Sie eigene Spezialisierungen.</span>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="btn-reset-roles" style="padding: 8px 16px;">
+            <i class="fa-solid fa-arrow-rotate-left"></i> Standard zurücksetzen
+          </button>
+          <button class="btn btn-primary" id="btn-add-role-trigger" style="padding: 8px 16px;">
+            <i class="fa-solid fa-plus"></i> Neue Rolle
+          </button>
+        </div>
+      </div>
+      
+      <div class="roles-list-container" style="flex-grow: 1; overflow-y: auto; max-height: 250px; border: 1px solid var(--color-border-glass); border-radius: var(--radius-sm);">
+        <table class="memory-table">
+          <thead>
+            <tr>
+              <th style="width: 20%;">Rolle</th>
+              <th style="width: 50%;">System-Prompt</th>
+              <th style="width: 12%;">Temperatur</th>
+              <th style="width: 18%;">Aktionen</th>
+            </tr>
+          </thead>
+          <tbody id="roles-table-body">
+            <!-- Dynamic role rows -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Add/Edit Role Form Box (Initially hidden) -->
+      <div id="role-form-container" style="display: none; margin-top: 20px; border-top: 1px solid var(--color-border-glass); padding-top: 20px;">
+        <h4 id="role-form-title">Rolle hinzufügen</h4>
+        <form id="role-form" style="margin-top: 12px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label for="role-key">Rollen Key / ID (nur Kleinbuchstaben/Unterstriche)</label>
+              <input type="text" id="role-key" placeholder="z.b. marketing_expert" class="text-input" style="width:100%;" required>
+            </div>
+            <div class="form-group">
+              <label for="role-title">Anzeigename</label>
+              <input type="text" id="role-title" placeholder="z.b. Marketing-Experte" class="text-input" style="width:100%;" required>
+            </div>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 12px;">
+            <div class="form-group">
+              <label for="role-icon">Icon (Klasse)</label>
+              <input type="text" id="role-icon" placeholder="fa-bullhorn" class="text-input" style="width:100%;" required>
+            </div>
+            <div class="form-group">
+              <label for="role-context">Sliding Window</label>
+              <select id="role-context" class="form-input" style="width:100%;">
+                <option value="compact">Kompakt (Letzte 10)</option>
+                <option value="30" selected>Standard (Letzte 30)</option>
+                <option value="50">Groß (Letzte 50)</option>
+                <option value="full">Vollständig (Max 100)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="role-temperature">Temp. (<span id="role-temp-val">0.7</span>)</label>
+              <input type="range" id="role-temperature" min="0.0" max="2.0" step="0.1" value="0.7" style="width:100%; accent-color: var(--color-primary);">
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 12px;">
+            <label for="role-description">Kurzbeschreibung (für die Kachel)</label>
+            <input type="text" id="role-description" placeholder="Schreibt Marketingtexte und Konzepte..." class="text-input" style="width:100%;" required>
+          </div>
+
+          <div class="form-group" style="margin-top: 12px;">
+            <label for="role-prompt">System-Prompt (Instruktionen für die KI)</label>
+            <textarea id="role-prompt" placeholder="Du bist ein weltklasse Marketing-Experte..." class="text-input" style="width:100%; height:100px; resize:vertical; font-family:var(--font-sans); font-size:13px;" required></textarea>
+          </div>
+
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-role-form">Abbrechen</button>
+            <button type="submit" class="btn btn-primary" id="btn-save-role">Speichern</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ADD TO DASHBOARD MODAL -->
+  <dialog class="modal-dialog" id="modal-add-dashboard">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Zum Dashboard hinzufügen</h2>
+        <button class="btn-icon" id="btn-close-add-dashboard"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="add-dashboard-type">Typ</label>
+          <select id="add-dashboard-type" class="form-input">
+            <option value="insight">Kernaussage / Muster</option>
+            <option value="mindset">Mindset / Leitsatz</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="add-dashboard-content">Inhalt</label>
+          <textarea id="add-dashboard-content" class="form-input" rows="4"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-add-dashboard">Abbrechen</button>
+        <button class="btn btn-primary" id="btn-save-dashboard">Hinzufügen</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- HANDOVER / ROLE SWITCH MODAL -->
+  <dialog class="modal-dialog" id="modal-handover">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="handover-modal-title">Übergabe / Rollenwechsel</h2>
+        <button class="btn-icon" id="btn-close-handover"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <p id="handover-modal-desc" class="text-muted" style="margin-bottom: 1rem;">Wähle die Ziel-Rolle aus.</p>
+        <div class="form-group">
+          <label for="handover-role-select">Spezialist auswählen</label>
+          <select id="handover-role-select" class="form-input">
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+        <input type="hidden" id="handover-action-type" value="switch">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-handover">Abbrechen</button>
+        <button class="btn btn-primary" id="btn-execute-handover">Bestätigen</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 5. CONFIRM DIALOG MODAL -->
+  <dialog class="modal-dialog modal-confirm" id="modal-confirm">
+    <div class="modal-header">
+      <h3 id="confirm-title">Bestätigung</h3>
+    </div>
+    <div class="modal-body">
+      <p id="confirm-message" style="margin: 0 0 24px; color: var(--color-text-secondary); line-height: 1.6;"></p>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="btn btn-secondary" id="btn-confirm-cancel">Abbrechen</button>
+        <button class="btn btn-danger" id="btn-confirm-ok">
+          <i class="fa-solid fa-trash-can"></i> Löschen
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- External scripts -->
+  <!-- Markdown parser -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Prism Syntax highlighting -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  
+  <!-- App JS -->
+  <script src="app.js"></script>
+</body>
+</html>

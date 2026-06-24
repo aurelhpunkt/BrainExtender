@@ -1,0 +1,12 @@
+"use strict";loaded_g_0(function(_){var window=this;
+_.g("aBkG4d");
+
+_.q();
+_.g("FgpTUc");
+var Hxb=["src","alt","UQ","XN","cM"],Ixb=class extends _.T{constructor(a){super(a.ha);this.response=a;a=this.ga();_.Az(this,a)}aa(){var a=this.j().src,b=this.j().alt,c=_.Ez(this,"Lm6Dgc"),d=_.Ez(this,"AhBnjb"),e=this.j().UQ,f=this.j().XN,k=this.j().cM,m=_.Dz(this,0,"div",!1),n=_.Dz(this,1,"div",!1),[r,t]=this.ea("rHMMIb",_.K(e,void 0,"xAo1n")),u=_.qm(_.GH);this.onInit(function(){f||u().then(E=>{E.j.bind(t)})});var w=_.Fz(this,2,"div",!1),x=_.Fz(this,3,"div",!1),y=_.pm(_.jy),z=_.pm(_.IH),D=_.pm(_.HH);
+this.ja("MogrJc",function(E){var G=E instanceof _.aO?E.e:E;if(f){let I;(I=G.stopPropagation)==null||I.call(G);c?c(E,G.currentTarget):(()=>_.l(function*(){var N=yield y;yield _.cmb(a,b?(b.toLowerCase().replace(/ /g,"_")||"image")+".jpg":"image.jpg",z,N,E.target)}))()}else c&&c(E,x.value)});this.ja("T4RtCe",function(E){var G=E instanceof _.aO?E.e:E;if(f){let I;(I=G.stopPropagation)==null||I.call(G);d?d(E,G.currentTarget):(()=>_.l(function*(){var N=yield y,P=b?(b.toLowerCase().replace(/ /g,"_")||"image")+
+".jpg":"image.jpg",W=yield D;W.isAvailable()?yield W.Bp(a,P):yield _.dmb(a,P,N,E.target)}))()}else d&&d(E,w.value)});this.ja("SLNyZe",function(E){k||E.target===n.value&&_.Me(m.value.parentElement,"gZgazf")});_.Hz(this,"HugV6",r,()=>_.V(_.uF,{na:r,then:()=>_.V(_.cO,{fa:_.v(_.fO(_.dO(new _.iO,"Teilen"),7).j(!0))},_.V(_.jO,{size:20})),else:()=>_.V(_.cO,{fa:_.v(_.fO(_.dO(new _.iO,"Teilen"),7).j(!1))},_.V(_.jO,{size:20}))}));_.Hz(this,"WyzG9e",r,()=>_.V(_.uF,{na:r,then:()=>_.V(_.cO,{fa:_.v(_.fO(_.dO(new _.iO,
+"Download"),7).j(!0))},_.V(_.zG,{icon:_.v(_.AG(new _.lC,102).setSize(20))})),else:()=>_.V(_.cO,{fa:_.v(_.fO(_.dO(new _.iO,"Download"),7).j(!1))},_.V(_.zG,{icon:_.v(_.AG(new _.lC,102).setSize(20))}))}));this.da()}j(){return super.j()}ba(){return Hxb}};Ixb.prototype.$wa$p2ggSe=function(){return this.ba};Ixb.prototype.$wa$QyQmSc=function(){return this.j};Ixb.prototype.$wa$kXCA5e=function(){return this.aa};_.S(_.h("FgpTUc",[_.Y]),Ixb);
+_.q();
+});
+// Google Inc.
