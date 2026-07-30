@@ -268,6 +268,11 @@
           </div>
         </header>
         
+        <!-- Rolling Summary Banner -->
+        <div id="rolling-summary-banner" style="display:none; padding:10px; background:rgba(30,30,40,0.8); border-bottom:1px solid rgba(255,255,255,0.1); font-size:12px; color:#aaa; max-height:100px; overflow-y:auto;">
+          <strong>Kurzzeitgedächtnis (Rolling Summary):</strong> <span id="rolling-summary-text"></span>
+        </div>
+        
         <!-- Messages Area -->
         <div class="messages-container" id="messages-container">
           <!-- Dynamic Chat messages -->
@@ -289,6 +294,13 @@
             
             <textarea id="chat-input" placeholder="Schreibe eine Nachricht an deinen Assistenten..." rows="1"></textarea>
             
+            <select id="context-method" class="btn-icon" title="Kontext-Strategie wählen" style="appearance:none; padding:0 8px; font-weight:bold; font-size:12px; width:auto; border-radius:4px; background:rgba(255,255,255,0.1); color:white;">
+              <option value="sliding_window">Klassisch (Sliding Window)</option>
+              <option value="rolling_summary">Rolling Summary (Llama 3)</option>
+              <option value="in_chat_rag">In-Chat RAG (Gemini Embeddings)</option>
+              <option value="distillation">Distillation (Llama 3)</option>
+            </select>
+
             <button type="button" class="btn-icon btn-voice" id="btn-handsfree" title="HandsFree (Auto-Senden & Vorlesen)">
               <i class="fa-solid fa-headset"></i>
             </button>

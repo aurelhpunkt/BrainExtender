@@ -892,6 +892,16 @@ async function loadActiveChat(chatId) {
     elements.badgeTone.textContent = TONE_NAMES[chat.tone] || 'Sachlich';
     elements.badgeModel.value = chat.model || 'gemini-2.5-pro';
     
+    // Check for rolling summary
+    const banner = document.getElementById('rolling-summary-banner');
+    const bannerText = document.getElementById('rolling-summary-text');
+    if (chat.rolling_summary) {
+      bannerText.textContent = chat.rolling_summary;
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+    
     // Messages Rendering
     elements.messagesContainer.innerHTML = '';
     
@@ -1073,26 +1083,30 @@ function renderMessageBubble(msg, temp = false) {
 
   // Render recalled memories if assistant message used them
   let memoriesHtml = '';
-  if (msg.role === 'model' && msg.recalledMemories && msg.recalledMemories.length > 0) {
-    const memoryId = `memories-${msg.id || Math.random().toString(36).substring(7)}`;
-    memoriesHtml = `
-      <div class="recalled-memories-wrapper">
-        <button class="memory-toggle-btn" onclick="toggleMemoryList('${memoryId}')">
-          <i class="fa-solid fa-brain"></i> Langzeit-Gedächtnis abgerufen (${msg.recalledMemories.length}) <i class="fa-solid fa-chevron-down toggle-arrow"></i>
-        </button>
-        <ul class="recalled-memories-list" id="${memoryId}" style="display: none;">
-          ${msg.recalledMemories.map((m, idx) => `
-            <li class="recalled-memory-item">
-              <div class="recalled-memory-meta">
-                <span>Quelle: ${m.metadata.source || 'Import'}</span>
-                <span>Ähnlichkeit: ${(m.similarity * 100).toFixed(0)}%</span>
-              </div>
-              <div class="recalled-memory-text">${escapeHtml(m.text)}</div>
-            </li>
-          `).join('')}
-        </ul>
-      </div>
-    `;
+  if (msg.role === 'model' && Array.isArray(msg.recalledMemories) && msg.recalledMemories.length > 0) {
+    // Ensure all elements are objects before mapping to avoid errors with corrupted data
+    const validMemories = msg.recalledMemories.filter(m => typeof m === 'object' && m !== null);
+    if (validMemories.length > 0) {
+      const memoryId = `memories-${msg.id || Math.random().toString(36).substring(7)}`;
+      memoriesHtml = `
+        <div class="recalled-memories-wrapper">
+          <button class="memory-toggle-btn" onclick="toggleMemoryList('${memoryId}')">
+            <i class="fa-solid fa-brain"></i> Langzeit-Gedächtnis abgerufen (${validMemories.length}) <i class="fa-solid fa-chevron-down toggle-arrow"></i>
+          </button>
+          <ul class="recalled-memories-list" id="${memoryId}" style="display: none;">
+            ${validMemories.map((m, idx) => `
+              <li class="recalled-memory-item">
+                <div class="recalled-memory-meta">
+                  <span>Quelle: ${m.metadata?.source || 'Import'}</span>
+                  <span>Ähnlichkeit: ${m.similarity ? (m.similarity * 100).toFixed(0) : 'N/A'}%</span>
+                </div>
+                <div class="recalled-memory-text">${escapeHtml(m.text || '')}</div>
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      `;
+    }
   }
 
   // Render Vogelperspektive facts if assistant message used them
@@ -1139,6 +1153,9 @@ function renderMessageBubble(msg, temp = false) {
   if (msg.role === 'model') {
     actionsHtml = `
       <div class="message-actions" style="margin-top: 0.5rem; text-align: right;">
+        <button class="btn btn-secondary btn-export-docx" style="font-size: 0.8rem; padding: 0.3rem 0.6rem; margin-right: 0.5rem;">
+          <i class="fa-solid fa-file-word"></i> Export als DocX
+        </button>
         <button class="btn btn-secondary btn-add-dashboard" style="font-size: 0.8rem; padding: 0.3rem 0.6rem;">
           <i class="fa-solid fa-plus"></i> Ans Dashboard pinnen
         </button>
@@ -1164,6 +1181,12 @@ function renderMessageBubble(msg, temp = false) {
       if (btnAdd) {
         btnAdd.addEventListener('click', () => {
           openAddDashboardModal(msg.content);
+        });
+      }
+      const btnExport = bubble.querySelector('.btn-export-docx');
+      if (btnExport) {
+        btnExport.addEventListener('click', () => {
+          exportToDocx(msg.content);
         });
       }
     }, 0);
@@ -1249,6 +1272,11 @@ async function sendMessage() {
   formData.append('content', text);
   formData.append('useMemory', elements.toggleMemory.checked);
   formData.append('autoLearn', elements.toggleLearn.checked);
+  
+  const contextMethodEl = document.getElementById('context-method');
+  if (contextMethodEl) {
+    formData.append('contextMethod', contextMethodEl.value);
+  }
   formData.append('useVogelperspektive', elements.toggleVogelperspektive.checked);
   formData.append('useWebSearch', elements.toggleWebSearch ? elements.toggleWebSearch.checked : false);
   
@@ -1387,21 +1415,23 @@ async function sendMessage() {
             } else if (data.recalledMemories || data.vogelData) {
               if (data.recalledMemories) {
                 recalledMemories = data.recalledMemories;
-                if (recalledMemories.length > 0) {
+                // Ensure it's a valid array before mapping
+                const validMemories = Array.isArray(recalledMemories) ? recalledMemories.filter(m => typeof m === 'object' && m !== null) : [];
+                if (validMemories.length > 0) {
                   const memId = `memories-${Math.random().toString(36).substring(7)}`;
                   memoryPlaceholder.innerHTML = `
                     <div class="recalled-memories-wrapper">
                       <button class="memory-toggle-btn" onclick="toggleMemoryList('${memId}')">
-                        <i class="fa-solid fa-brain"></i> Langzeit-Gedächtnis abgerufen (${recalledMemories.length}) <i class="fa-solid fa-chevron-down toggle-arrow"></i>
+                        <i class="fa-solid fa-brain"></i> Langzeit-Gedächtnis abgerufen (${validMemories.length}) <i class="fa-solid fa-chevron-down toggle-arrow"></i>
                       </button>
                       <ul class="recalled-memories-list" id="${memId}" style="display: none;">
-                        ${recalledMemories.map(m => `
+                        ${validMemories.map(m => `
                           <li class="recalled-memory-item">
                             <div class="recalled-memory-meta">
-                              <span>Quelle: ${m.metadata.source || 'Import'}</span>
-                              <span>Ähnlichkeit: ${(m.similarity * 100).toFixed(0)}%</span>
+                              <span>Quelle: ${m.metadata?.source || 'Import'}</span>
+                              <span>Ähnlichkeit: ${m.similarity ? (m.similarity * 100).toFixed(0) : 'N/A'}%</span>
                             </div>
-                            <div class="recalled-memory-text">${escapeHtml(m.text)}</div>
+                            <div class="recalled-memory-text">${escapeHtml(m.text || '')}</div>
                           </li>
                         `).join('')}
                       </ul>
@@ -2657,5 +2687,38 @@ async function processAudioQueue() {
     console.error("TTS Error:", err);
     isPlayingAudio = false;
     processAudioQueue(); // Try next chunk
+  }
+}
+
+async function exportToDocx(markdownContent) {
+  try {
+    showToast("Dokument wird exportiert...", "info");
+    const response = await fetch('/api/export/docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: markdownContent, chatId: currentChatId })
+    });
+    
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Fehler beim Export');
+    }
+    
+    // Trigger file download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = 'BrainExtender_Export.docx';
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    a.remove();
+    
+    showToast("Export erfolgreich!", "success");
+  } catch (error) {
+    console.error("Export Error:", error);
+    showToast("Fehler beim Export: " + error.message, "error");
   }
 }

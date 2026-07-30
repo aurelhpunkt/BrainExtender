@@ -1,10 +1,13 @@
 const express = require('express');
+const cors = require('cors');
+const mammoth = require('mammoth');
 const multer = require('multer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { google } = require('googleapis');
 const { initProtokollant } = require('./briefing_agent');
+const contextEngine = require('./context_engine');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
@@ -1046,6 +1049,12 @@ function updateCostStats(modelName, inputTokens, outputTokens) {
     } else if (normModel.includes('flash-lite')) {
       inputRate = 0.000000075; // Flash Lite rate ($0.075/1M)
       outputRate = 0.00000030; // Flash Lite rate ($0.30/1M)
+    }
+
+    // Gemini Pricing: Prompts longer than 128k tokens cost exactly double!
+    if ((normModel.includes('pro') || normModel.includes('flash')) && inputTokens > 128000) {
+      inputRate *= 2;
+      outputRate *= 2;
     }
 
     const requestCost = (inputTokens * inputRate) + (outputTokens * outputRate);
@@ -2489,7 +2498,7 @@ function parseHtmlExport(htmlContent) {
 // 5. Send Message Stream (Express SSE)
 app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
   const chatId = req.params.id;
-  const { content, useMemory, autoLearn, useVogelperspektive, useWebSearch } = req.body;
+  const { content, useMemory, autoLearn, useVogelperspektive, useWebSearch, contextMethod } = req.body;
   const apiKey = getApiKey(req);
 
   if (!apiKey) return res.status(401).json({ error: "Gemini API-Schlüssel fehlt." });
@@ -2524,14 +2533,24 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
       };
       filesMetadata.push(fileMeta);
 
-      // Read file and convert to base64 for Gemini multimodal input
-      const fileData = fs.readFileSync(file.path).toString("base64");
-      apiParts.push({
-        inlineData: {
-          data: fileData,
-          mimeType: file.mimetype
+      // Read file and convert to base64 for Gemini multimodal input, or extract text if docx
+      if (file.originalname.toLowerCase().endsWith('.docx') || file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        try {
+          const result = await mammoth.convertToHtml({ path: file.path });
+          apiParts.push({ text: `\n--- [Start Dokument (HTML): ${file.originalname}] ---\n${result.value}\n--- [Ende Dokument] ---\n` });
+        } catch (err) {
+          console.error("Fehler beim Parsen der DOCX Datei:", err);
+          apiParts.push({ text: `[Fehler beim Lesen von ${file.originalname}]` });
         }
-      });
+      } else {
+        const fileData = fs.readFileSync(file.path).toString("base64");
+        apiParts.push({
+          inlineData: {
+            data: fileData,
+            mimeType: file.mimetype
+          }
+        });
+      }
     }
   }
 
@@ -2552,52 +2571,8 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
   chat.messages.push(userMessage);
   saveChats(chats);
 
-  // --- OLLAMA ROUTER INJECTION ---
-  if (content && (!req.files || req.files.length === 0)) {
-    // Only route text-only prompts
-    const recentMessagesForRouter = chat.messages.slice(-3);
-    const queryContextForRouter = recentMessagesForRouter.map(m => `${m.role === 'user' ? 'User' : 'KI'}: ${m.content}`).join('\n');
-    
-    res.write(`data: ${JSON.stringify({ info: `🧠 Lokaler Router analysiert Anfrage...` })}\n\n`);
-    const routeDecision = await evaluateWithLocalRouter(queryContextForRouter);
-    
-    if (routeDecision === 'LOCAL') {
-      console.log("Routed to LOCAL (Ollama)");
-      res.write(`data: ${JSON.stringify({ info: `⚡ Llama 3 (Lokal) antwortet...` })}\n\n`);
-      
-      const localPrompt = `Du bist ein hilfreicher Assistent. Antworte auf Deutsch, kurz und prägnant.
-Hier ist der bisherige Kontext des Gesprächs:
-${queryContextForRouter}
-
-Antworte nun passend auf die letzte Frage des Users:`;
-
-      try {
-        const localResponseText = await streamLocalResponse(localPrompt, res);
-        res.write(`data: [DONE]\n\n`);
-        
-        // Save local response to chat history
-        const freshChats = getChats();
-        const freshChat = freshChats.find(c => c.id === chat.id);
-        if (freshChat) {
-          freshChat.messages.push({
-            id: uuidv4(),
-            role: 'model',
-            content: localResponseText,
-            timestamp: new Date().toISOString()
-          });
-          saveChats(freshChats);
-        }
-        res.end();
-        return; // Exit completely, Gemini process skipped!
-      } catch (localErr) {
-        res.write(`data: ${JSON.stringify({ info: `⚠️ Lokale Generierung fehlgeschlagen. Wechsle zu Gemini...` })}\n\n`);
-      }
-    } else {
-      console.log("Routed to GEMINI");
-      res.write(`data: ${JSON.stringify({ info: `☁️ Route: Komplex (Lade Gemini Pro & RAG)...` })}\n\n`);
-    }
-  }
-  // --- END OLLAMA ROUTER INJECTION ---
+  // --- OLLAMA ROUTER INJECTION REMOVED ---
+  // Always routing to Gemini for maximum capability.
 
   // Search vector memory if activated
   let recalledMemories = [];
@@ -2742,10 +2717,12 @@ Antworte nun passend auf die letzte Frage des Users:`;
 
     // Construct Gemini chat history structure (excluding the current turn)
     const history = [];
-    let prevMessages = chat.messages.slice(0, -1);
-    if (prevMessages.length > contextWindow) {
-      prevMessages = prevMessages.slice(-contextWindow);
-    }
+    let prevMessages = await contextEngine.buildContextForLLM(
+      contextMethod || 'sliding_window',
+      Object.assign({}, chat, {messages: chat.messages.slice(0, -1)}),
+      content,
+      contextWindow
+    );
     
     // Merge consecutive messages of the same role to satisfy Gemini API requirements
     for (let i = 0; i < prevMessages.length; i++) {
@@ -2942,6 +2919,35 @@ Antworte nun passend auf die letzte Frage des Users:`;
     if (freshChat) {
       freshChat.messages.push(modelMessage);
       saveChats(freshChats);
+      
+      // Asynchrone Hintergrund-Updates für Kontext-Strategien
+      (async () => {
+        try {
+          let updated = false;
+          
+          if (contextMethod === 'in_chat_rag') {
+            const embUser = await getEmbedding(content, apiKey);
+            const embModel = await getEmbedding(completeResponse, apiKey);
+            
+            const uMsg = freshChat.messages.find(m => m.timestamp === userMessage.timestamp);
+            if (uMsg) uMsg.embedding = embUser;
+            
+            const mMsg = freshChat.messages.find(m => m.timestamp === modelMessage.timestamp);
+            if (mMsg) mMsg.embedding = embModel;
+            
+            updated = true;
+          }
+          
+          if (contextMethod === 'rolling_summary') {
+            await contextEngine.updateRollingSummaryAsync(freshChat);
+            updated = true;
+          }
+          
+          if (updated) saveChats(freshChats);
+        } catch (e) {
+          console.error("Hintergrund-Update für Kontext fehlgeschlagen:", e);
+        }
+      })();
     }
 
     // Auto-learn/index current exchange if requested
@@ -3082,6 +3088,61 @@ async function handleAnthropicStream(modelName, chat, systemInstructionText, res
   }
   return { completeResponse, promptTokens, completionTokens };
 }
+
+// Endpoint to export Markdown to DocX using Pandoc
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
+const os = require('os');
+
+app.post('/api/export/docx', express.json(), async (req, res) => {
+  const { content, chatId } = req.body;
+  if (!content) return res.status(400).json({ error: "Missing content" });
+
+  try {
+    let referenceDocPath = null;
+    
+    // Find the latest docx file in the chat
+    if (chatId) {
+      const chats = getChats();
+      const chat = chats.find(c => c.id === chatId);
+      if (chat && chat.messages) {
+        // Iterate backwards
+        for (let i = chat.messages.length - 1; i >= 0; i--) {
+          const msg = chat.messages[i];
+          if (msg.files) {
+            const docxFile = msg.files.find(f => f.name && f.name.toLowerCase().endsWith('.docx'));
+            if (docxFile) {
+              referenceDocPath = path.join(__dirname, 'data', docxFile.path);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    const tmpMdPath = path.join(os.tmpdir(), `export_${Date.now()}.md`);
+    const tmpDocxPath = path.join(os.tmpdir(), `export_${Date.now()}.docx`);
+    fs.writeFileSync(tmpMdPath, content, 'utf8');
+
+    let pandocCmd = `pandoc "${tmpMdPath}" -o "${tmpDocxPath}" --toc`;
+    if (referenceDocPath && fs.existsSync(referenceDocPath)) {
+      pandocCmd += ` --reference-doc="${referenceDocPath}"`;
+    }
+
+    await execPromise(pandocCmd);
+
+    res.download(tmpDocxPath, 'BrainExtender_Export.docx', (err) => {
+      // Cleanup
+      if (fs.existsSync(tmpMdPath)) fs.unlinkSync(tmpMdPath);
+      if (fs.existsSync(tmpDocxPath)) fs.unlinkSync(tmpDocxPath);
+    });
+
+  } catch (error) {
+    console.error("Export error:", error);
+    res.status(500).json({ error: "Fehler beim Exportieren des Dokuments." });
+  }
+});
 
 // Start Server
 app.listen(PORT, () => {
