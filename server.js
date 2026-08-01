@@ -2,10 +2,17 @@ const express = require('express');
 const cors = require('cors');
 const mammoth = require('mammoth');
 const multer = require('multer');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { google } = require('googleapis');
+
+const customSafetySettings = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 const { initProtokollant } = require('./briefing_agent');
 const contextEngine = require('./context_engine');
 const dotenv = require('dotenv');
@@ -2697,6 +2704,29 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
       promptTokenCount = streamRes.promptTokens;
       candidatesTokenCount = streamRes.completionTokens;
     } else {
+      const sanitizeContentLocal = async (text) => {
+        if (typeof text !== 'string') return text;
+        try {
+          const prompt = `DU BIST EIN CONTENT SANITIZER.\n\nDieser Text wurde von einem KI-Sicherheitsfilter blockiert. Schreibe den Text komplett klinisch, objektiv und jugendfrei um. Entferne ALLE potenziell anstößigen oder expliziten Wörter, bewahre aber den sachlichen Sinn für eine psychologische Analyse.\n\nTEXT:\n${text}\n\nBEREINIGTER TEXT:`;
+          const response = await fetch("http://localhost:11434/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "llama3:latest",
+              prompt: prompt,
+              stream: false
+            })
+          });
+          if (response.ok) {
+            const data = await response.json();
+            return data.response.trim();
+          }
+        } catch (e) {
+          console.error("Local sanitization failed:", e.message);
+        }
+        return text;
+      };
+
       const sendWithRetry = async (chatInstance, payload, retries = 4, delay = 2000) => {
       for (let i = 0; i <= retries; i++) {
         try {
@@ -2765,6 +2795,7 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
           model: currentModelName,
           systemInstruction: systemInstructionText,
           tools: (useVogelperspektive === 'true' || useWebSearch === 'true') ? vogelTools : undefined,
+          safetySettings: customSafetySettings,
           generationConfig: {
             temperature: roleTemp
           }
@@ -2840,6 +2871,7 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
                 const textOnlyModel = genAI.getGenerativeModel({
                   model: modelName,
                   systemInstruction: systemInstructionText,
+                  safetySettings: customSafetySettings,
                 });
                 const secondGeminiChat = textOnlyModel.startChat({ history: secondHistory });
                 const secondResult = await sendWithRetry(secondGeminiChat, combinedContext, 1, 2000);
@@ -2874,6 +2906,33 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
         break; // Successfully completed stream
 
       } catch (err) {
+        if (err.message && err.message.includes('PROHIBITED_CONTENT')) {
+          console.warn("API blockiert durch PROHIBITED_CONTENT. Starte lokale Sanitization (Llama3)...");
+          res.write(`data: ${JSON.stringify({ info: `⚠️ Text durch KI-Filter blockiert. Entschärfe Text automatisch über lokales Llama3 und starte 2. Versuch...` })}\n\n`);
+          
+          // Sanitize current payload
+          if (typeof currentPayload === 'string') {
+            currentPayload = await sanitizeContentLocal(currentPayload);
+          } else if (Array.isArray(currentPayload)) {
+            for (let p of currentPayload) {
+              if (p.text) p.text = await sanitizeContentLocal(p.text);
+            }
+          }
+          
+          // Sanitize history
+          for (let h of history) {
+            if (h.parts) {
+              for (let part of h.parts) {
+                if (part.text) part.text = await sanitizeContentLocal(part.text);
+              }
+            }
+          }
+          
+          // Retry immediately without increasing attempt count for standard retries
+          // (Although it will use the next iteration of the while loop)
+          continue;
+        }
+
         if (attemptCount >= maxAttempts || completeResponse.length > 0) {
           if (completeResponse.length > 0) {
             const warnMsg = "\n\n*(Generierung wurde durch Serverüberlastung abgebrochen)*";
