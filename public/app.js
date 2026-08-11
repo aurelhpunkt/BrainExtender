@@ -698,6 +698,10 @@ function initEventListeners() {
   // Chat Actions
   elements.btnDeleteChat.addEventListener('click', deleteActiveChat);
   elements.badgeModel.addEventListener('change', changeActiveChatModel);
+  const contextMethodEl = document.getElementById('context-method');
+  if (contextMethodEl) {
+    contextMethodEl.addEventListener('change', changeActiveContextMethod);
+  }
 
   // Auto-resize chat textarea
   elements.chatInput.addEventListener('input', () => {
@@ -892,6 +896,11 @@ async function loadActiveChat(chatId) {
     elements.badgeTone.textContent = TONE_NAMES[chat.tone] || 'Sachlich';
     elements.badgeModel.value = chat.model || 'gemini-2.5-pro';
     
+    const contextMethodEl = document.getElementById('context-method');
+    if (contextMethodEl) {
+      contextMethodEl.value = chat.contextMethod || 'sliding_window';
+    }
+    
     // Check for rolling summary
     const banner = document.getElementById('rolling-summary-banner');
     const bannerText = document.getElementById('rolling-summary-text');
@@ -1001,6 +1010,32 @@ async function changeActiveChatModel() {
     }
   } catch (err) {
     alert("Fehler beim Speichern: " + err.message);
+  }
+}
+
+async function changeActiveContextMethod() {
+  if (!activeChatId) return;
+  const contextMethodEl = document.getElementById('context-method');
+  if (!contextMethodEl) return;
+  
+  const newMethod = contextMethodEl.value;
+  
+  try {
+    const res = await fetch(`/api/chats/${activeChatId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contextMethod: newMethod })
+    });
+    
+    if (res.ok) {
+      const chat = chats.find(c => c.id === activeChatId);
+      if (chat) chat.contextMethod = newMethod;
+    } else {
+      const err = await res.json();
+      console.error("Fehler beim Ändern der Kontext-Strategie:", err.error);
+    }
+  } catch (err) {
+    console.error("Fehler beim Speichern:", err.message);
   }
 }
 

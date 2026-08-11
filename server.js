@@ -1959,7 +1959,7 @@ app.delete('/api/chats/:id', (req, res) => {
 // Update chat properties dynamically
 app.patch('/api/chats/:id', (req, res) => {
   const chatId = req.params.id;
-  const { model, role, tone, title } = req.body;
+  const { model, role, tone, title, contextMethod } = req.body;
   const chats = getChats();
   const chat = chats.find(c => c.id === chatId);
   if (!chat) return res.status(404).json({ error: "Chat nicht gefunden" });
@@ -1968,6 +1968,7 @@ app.patch('/api/chats/:id', (req, res) => {
   if (role) chat.role = role;
   if (tone) chat.tone = tone;
   if (title) chat.title = title;
+  if (contextMethod) chat.contextMethod = contextMethod;
 
   saveChats(chats);
   res.json(chat);
