@@ -1,13 +1,17 @@
 const fs = require('fs');
+const data = JSON.parse(fs.readFileSync('/Users/aurelhullenhagen/Development/BrainExtender/data/chats.json', 'utf8'));
 
-const dataDir = '/Users/aurelhullenhagen/Development/BrainExtender/data';
-const chats = JSON.parse(fs.readFileSync(`${dataDir}/chats.json`, 'utf8'));
+const chatList = data.chats || [];
+const coachChat = chatList.find(c => c.role === 'beziehung');
 
-const activeChat = chats.chats.find(c => c.title.includes('Beziehungs-Coach'));
-if (activeChat) {
-  const lastMessages = activeChat.messages.slice(-5);
-  console.log("Last 5 messages:");
-  lastMessages.forEach(m => console.log(`[${m.role}] ${m.content.substring(0, 100)}`));
+if (coachChat && coachChat.messages) {
+    const msgs = coachChat.messages.slice(-20);
+    let out = "--- Beziehungs-Coach Chat (Letzte 20) ---\n\n";
+    msgs.forEach(m => {
+        out += `[${m.timestamp}] ${m.role.toUpperCase()}:\n${m.content}\n\n`;
+    });
+    fs.writeFileSync('/Users/aurelhullenhagen/Development/BrainExtender/scratch/coach_chat.txt', out);
+    console.log("Success");
 } else {
-  console.log("Chat not found");
+    console.log("Coach chat not found!");
 }
