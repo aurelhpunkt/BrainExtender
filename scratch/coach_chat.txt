@@ -1,0 +1,57 @@
+LAST 20 MESSAGES FOR COACH:
+
+[1] Time: undefined
+Role: co_pilot
+Agent: undefined
+Content: undefined
+
+[2] Time: undefined
+Role: finanzen
+Agent: undefined
+Content: undefined
+
+[3] Time: undefined
+Role: beziehung
+Agent: undefined
+Content: undefined
+
+[4] Time: undefined
+Role: it_expert
+Agent: undefined
+Content: undefined
+
+[5] Time: undefined
+Role: marketing
+Agent: undefined
+Content: undefined
+
+[6] Time: undefined
+Role: sprachtrainer
+Agent: undefined
+Content: undefined
+
+[7] Time: undefined
+Role: kfz_meister
+Agent: undefined
+Content: undefined
+
+[8] Time: undefined
+Role: steuerberater
+Agent: undefined
+Content: undefined
+
+[9] Time: undefined
+Role: it_expert
+Agent: undefined
+Content: undefined
+
+[10] Time: undefined
+Role: beziehung
+Agent: undefined
+Content: undefined
+
+[11] Time: undefined
+Role: it_expert
+Agent: undefined
+Content: undefined
+
