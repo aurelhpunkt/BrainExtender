@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { v4: uuidv4 } = require('uuid');
+const { runLeverExtractor } = require('./lever_extractor');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const TODOS_FILE = path.join(DATA_DIR, 'todos.json');
@@ -237,7 +238,13 @@ function initProtokollant() {
     runMorningBriefing(process.env.GEMINI_API_KEY);
   });
 
-  console.log("[Protokollant] Cron-Jobs für Scanner (03:00) und Briefing (07:00) initialisiert.");
+  // Phase 3: Lever Extractor (Weekly on Sunday at 12:00 PM)
+  cron.schedule('0 12 * * 0', () => {
+    // isFullScan = false -> scan last 30 days
+    runLeverExtractor(process.env.GEMINI_API_KEY, false);
+  });
+
+  console.log("[Protokollant] Cron-Jobs für Scanner (03:00), Briefing (07:00) und Levers (So 12:00) initialisiert.");
 
   // Catch-up logic for sleeping MacBooks
   // If the server starts and we haven't posted a briefing today, run it now.

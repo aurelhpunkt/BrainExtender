@@ -17,13 +17,17 @@ let globalRoles = {};
 // --- DOM ELEMENTS ---
 const elements = {
   // Sidebar
+  sidebar: document.querySelector('.sidebar'),
+  btnPinSidebar: document.getElementById('btn-pin-sidebar'),
   btnNewChat: document.getElementById('btn-new-chat'),
   btnDashboard: document.getElementById('btn-dashboard'),
+  btnCalendar: document.getElementById('btn-calendar'),
   chatsList: document.getElementById('chats-list'),
   memoryCount: document.getElementById('memory-count'),
   
   // Footer buttons
   btnOpenMemory: document.getElementById('btn-open-memory'),
+  btnOpenManuals: document.getElementById('btn-open-manuals'),
   btnOpenImport: document.getElementById('btn-open-import'),
   btnOpenSettings: document.getElementById('btn-open-settings'),
   
@@ -31,6 +35,7 @@ const elements = {
   stateWelcome: document.getElementById('state-welcome'),
   stateChat: document.getElementById('state-chat'),
   stateDashboard: document.getElementById('state-dashboard'),
+  stateCalendar: document.getElementById('state-calendar'),
   
   // Setup Welcome View
   presetCards: document.querySelectorAll('.preset-card'),
@@ -41,6 +46,9 @@ const elements = {
   activeChatTitle: document.getElementById('active-chat-title'),
   badgeRole: document.getElementById('badge-role'),
   badgeTone: document.getElementById('badge-tone'),
+  headerManualsSelect: document.getElementById('header-manuals-select'),
+  chatManualsSelect: document.getElementById('chat-manuals-select'),
+  manualSelectionContainer: document.getElementById('manual-selection-container'),
   btnDeleteChat: document.getElementById('btn-delete-chat'),
   btnHandover: document.getElementById('btn-handover'),
   messagesContainer: document.getElementById('messages-container'),
@@ -79,6 +87,14 @@ const elements = {
   emptyMemoryMsg: document.getElementById('empty-memory-msg'),
   btnClearAllMemory: document.getElementById('btn-clear-all-memory'),
   
+  // Manuals Modal
+  modalManuals: document.getElementById('modal-manuals'),
+  btnCloseManuals: document.getElementById('btn-close-manuals'),
+  btnUploadManual: document.getElementById('btn-upload-manual'),
+  manualUploadInput: document.getElementById('manual-upload-input'),
+  btnRefreshManuals: document.getElementById('btn-refresh-manuals'),
+  manualsTableBody: document.getElementById('manuals-table-body'),
+
   // Import Modal
   modalImport: document.getElementById('modal-import'),
   btnCloseImport: document.getElementById('btn-close-import'),
@@ -124,6 +140,7 @@ const elements = {
 
 // Role Translation Map (loaded dynamically from server)
 let ROLE_NAMES = {};
+let ROLE_DESCRIPTIONS = {};
 
 // --- CONFIRM DIALOG HELPER ---
 // Returns a Promise that resolves true (confirmed) or false (cancelled).
@@ -168,7 +185,40 @@ const TONE_NAMES = {
 };
 
 // --- INITIALIZATION ---
+let isSidebarPinned = localStorage.getItem('sidebarPinned');
+if (isSidebarPinned === null) {
+  isSidebarPinned = true;
+  localStorage.setItem('sidebarPinned', 'true');
+} else {
+  isSidebarPinned = isSidebarPinned === 'true';
+}
+
+function updateSidebarState() {
+  if (isSidebarPinned) {
+    if (elements.sidebar) elements.sidebar.classList.add('pinned');
+    if (elements.btnPinSidebar) {
+      elements.btnPinSidebar.style.color = 'var(--color-primary)';
+      elements.btnPinSidebar.style.transform = 'rotate(0deg)';
+    }
+  } else {
+    if (elements.sidebar) elements.sidebar.classList.remove('pinned');
+    if (elements.btnPinSidebar) {
+      elements.btnPinSidebar.style.color = 'var(--color-text-muted)';
+      elements.btnPinSidebar.style.transform = 'rotate(-45deg)';
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  // Sidebar Pin Logic
+  updateSidebarState();
+  if (elements.btnPinSidebar) {
+    elements.btnPinSidebar.addEventListener('click', () => {
+      isSidebarPinned = !isSidebarPinned;
+      localStorage.setItem('sidebarPinned', isSidebarPinned);
+      updateSidebarState();
+    });
+  }
   initEventListeners();
   checkApiConfig();
   checkCalendarStatus();
@@ -177,6 +227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadStats();
   await loadGlobalRoles();
   await loadModels();
+  await populateManualsDropdowns();
   await loadChats();
   setInterval(loadChats, 5000); // Poll for updates from other sessions
 });
@@ -332,10 +383,12 @@ async function loadRoles() {
     const data = await res.json();
     dynamicRoles = data;
 
-    // Repopulate ROLE_NAMES dynamically
+    // Repopulate ROLE_NAMES and ROLE_DESCRIPTIONS dynamically
     ROLE_NAMES = {};
+    ROLE_DESCRIPTIONS = {};
     for (const key in data) {
       ROLE_NAMES[key] = data[key].title;
+      ROLE_DESCRIPTIONS[key] = data[key].description || '';
     }
 
     renderRolesGrid();
@@ -577,6 +630,12 @@ function initEventListeners() {
     switchState('dashboard');
   });
 
+  if (elements.btnCalendar) {
+    elements.btnCalendar.addEventListener('click', () => {
+      switchState('calendar');
+    });
+  }
+
   // Role Switch / Handover
   elements.badgeRole.addEventListener('click', () => openHandoverModal('switch'));
   elements.btnHandover.addEventListener('click', () => openHandoverModal('handover'));
@@ -607,6 +666,22 @@ function initEventListeners() {
   if (elements.btnVoiceSpeed) {
     elements.btnVoiceSpeed.addEventListener('click', toggleVoiceSpeed);
   }
+  
+  if (elements.headerManualsSelect) {
+    elements.headerManualsSelect.addEventListener('change', async (e) => {
+      if (!activeChatId) return;
+      const selected = Array.from(e.target.selectedOptions).map(opt => opt.value);
+      try {
+        await fetch(`/api/chats/${activeChatId}/manuals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ activeManuals: selected })
+        });
+      } catch (err) {
+        console.error("Failed to update active manuals", err);
+      }
+    });
+  }
 
   // Open modals
   elements.btnOpenSettings.addEventListener('click', () => {
@@ -616,6 +691,10 @@ function initEventListeners() {
     elements.modalMemory.showModal();
     loadMemories();
   });
+  elements.btnOpenManuals.addEventListener('click', () => {
+    elements.modalManuals.showModal();
+    loadManuals();
+  });
   elements.btnOpenImport.addEventListener('click', () => {
     elements.modalImport.showModal();
     resetImportProgress();
@@ -624,6 +703,7 @@ function initEventListeners() {
   // Close modals
   elements.btnCloseSettings.addEventListener('click', () => elements.modalSettings.close());
   elements.btnCloseMemory.addEventListener('click', () => elements.modalMemory.close());
+  elements.btnCloseManuals.addEventListener('click', () => elements.modalManuals.close());
   elements.btnCloseImport.addEventListener('click', () => elements.modalImport.close());
 
   // Save Settings API Key
@@ -652,6 +732,11 @@ function initEventListeners() {
       roleGrid.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
       card.classList.add('active');
       selectedRole = card.dataset.role;
+      
+      // Toggle manuals visibility
+      if (elements.manualSelectionContainer) {
+        elements.manualSelectionContainer.style.display = selectedRole === 'it_expert' ? 'block' : 'none';
+      }
     });
   }
 
@@ -764,23 +849,27 @@ function initEventListeners() {
 
 // --- STATE MANAGEMENT ---
 function switchState(state) {
+  const allStates = [elements.stateWelcome, elements.stateChat, elements.stateDashboard, elements.stateCalendar];
+  allStates.forEach(el => {
+    if (el) el.classList.remove('active');
+  });
+  
   if (state === 'welcome') {
-    elements.stateWelcome.classList.add('active');
-    elements.stateChat.classList.remove('active');
-    elements.stateDashboard.classList.remove('active');
+    if (elements.stateWelcome) elements.stateWelcome.classList.add('active');
     activeChatId = null;
     document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
   } else if (state === 'chat') {
-    elements.stateWelcome.classList.remove('active');
-    elements.stateDashboard.classList.remove('active');
-    elements.stateChat.classList.add('active');
+    if (elements.stateChat) elements.stateChat.classList.add('active');
   } else if (state === 'dashboard') {
-    elements.stateWelcome.classList.remove('active');
-    elements.stateChat.classList.remove('active');
-    elements.stateDashboard.classList.add('active');
+    if (elements.stateDashboard) elements.stateDashboard.classList.add('active');
     activeChatId = null;
     document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
     loadDashboard();
+  } else if (state === 'calendar') {
+    if (elements.stateCalendar) elements.stateCalendar.classList.add('active');
+    activeChatId = null;
+    document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
+    if (typeof loadCalendar === 'function') loadCalendar();
   }
 }
 
@@ -854,6 +943,9 @@ async function createChat() {
   const title = elements.chatTitleInput.value.trim();
   const defaultTitle = `${ROLE_NAMES[selectedRole]} - ${new Date().toLocaleDateString('de-DE')}`;
   const model = elements.chatModelSelect.value;
+  const activeManuals = selectedRole === 'it_expert' && elements.chatManualsSelect 
+    ? Array.from(elements.chatManualsSelect.selectedOptions).map(opt => opt.value) 
+    : [];
   
   try {
     const res = await fetch('/api/chats', {
@@ -863,7 +955,8 @@ async function createChat() {
         title: title || defaultTitle,
         role: selectedRole,
         tone: selectedTone,
-        model: model
+        model: model,
+        activeManuals: activeManuals
       })
     });
     
@@ -894,6 +987,20 @@ async function loadActiveChat(chatId) {
     elements.activeChatTitle.textContent = chat.title;
     elements.badgeRole.textContent = ROLE_NAMES[chat.role] || 'Standard';
     elements.badgeTone.textContent = TONE_NAMES[chat.tone] || 'Sachlich';
+    elements.badgeRole.title = ROLE_DESCRIPTIONS[chat.role] || '';
+    
+    // Header Manuals UI
+    if (elements.headerManualsSelect) {
+      if (chat.role === 'it_expert') {
+        elements.headerManualsSelect.style.display = 'inline-block';
+        Array.from(elements.headerManualsSelect.options).forEach(opt => {
+          opt.selected = chat.activeManuals && chat.activeManuals.includes(opt.value);
+        });
+      } else {
+        elements.headerManualsSelect.style.display = 'none';
+      }
+    }
+    
     elements.badgeModel.value = chat.model || 'gemini-2.5-pro';
     
     const contextMethodEl = document.getElementById('context-method');
@@ -1653,7 +1760,6 @@ async function sendMessage() {
             } else if (data.text) {
               accumulatedResponse += data.text;
               aiContent.innerHTML = marked.parse(accumulatedResponse);
-              Prism.highlightAllUnder(aiBubble);
               
               // Stream TTS logic: read chunks as they complete
               if (isSpeakerActive || isHandsFreeActive) {
@@ -1684,6 +1790,9 @@ async function sendMessage() {
     elements.btnStop.style.display = 'none';
     elements.btnSend.style.display = 'flex';
     currentAbortController = null;
+    
+    // Highlight syntax now that generation is done
+    Prism.highlightAllUnder(aiBubble);
     
     // Trigger Voice Output for any remaining text after stream finishes
     if (isSpeakerActive || isHandsFreeActive) {
@@ -1788,6 +1897,139 @@ async function clearAllMemory() {
 
 // Make deleteMemoryEntry globally accessible
 window.deleteMemoryEntry = deleteMemoryEntry;
+
+// --- MANUALS MANAGER ACTIONS ---
+async function loadManuals() {
+  try {
+    const res = await fetch('/api/manuals');
+    const data = await res.json();
+    
+    elements.manualsTableBody.innerHTML = '';
+    
+    if (data.manuals && data.manuals.length > 0) {
+      data.manuals.forEach(manual => {
+        const tr = document.createElement('tr');
+        const dateStr = new Date(manual.uploadedAt).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const sizeStr = (manual.size / 1024).toFixed(1) + ' KB';
+        
+        tr.innerHTML = `
+          <td>${escapeHtml(manual.filename)}</td>
+          <td>${sizeStr}</td>
+          <td style="color: var(--color-text-muted);">${dateStr}</td>
+          <td style="text-align: center;"><i class="fa-solid fa-trash-can clickable" onclick="deleteManualEntry('${manual.filename}')"></i></td>
+        `;
+        elements.manualsTableBody.appendChild(tr);
+      });
+    } else {
+      elements.manualsTableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Keine Handbücher hochgeladen</td></tr>';
+    }
+  } catch (err) {
+    console.error("Failed to load manuals:", err);
+  }
+}
+
+async function deleteManualEntry(filename) {
+  if (!confirm(`Möchtest du das Handbuch "${filename}" löschen?`)) return;
+  try {
+    const res = await fetch(`/api/manuals/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    if (res.ok) {
+      loadManuals();
+      // refresh select dropdowns if needed
+      await populateManualsDropdowns();
+    }
+  } catch (err) {
+    alert("Fehler beim Löschen: " + err.message);
+  }
+}
+window.deleteManualEntry = deleteManualEntry;
+
+if (elements.btnUploadManual) {
+  elements.btnUploadManual.addEventListener('click', () => {
+    elements.manualUploadInput.click();
+  });
+}
+if (elements.manualUploadInput) {
+  elements.manualUploadInput.addEventListener('change', async (e) => {
+    if (e.target.files.length === 0) return;
+    const formData = new FormData();
+    formData.append('file', e.target.files[0]);
+    try {
+      const res = await fetch('/api/manuals/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
+        loadManuals();
+        await populateManualsDropdowns();
+        
+        if (activeChatId) {
+          try {
+            const currentSelected = elements.headerManualsSelect ? 
+              Array.from(elements.headerManualsSelect.selectedOptions).map(o => o.value) : [];
+            if (!currentSelected.includes(data.filename)) {
+              currentSelected.push(data.filename);
+            }
+            
+            await fetch(`/api/chats/${activeChatId}/manuals`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ activeManuals: currentSelected })
+            });
+            loadChat(activeChatId);
+          } catch (err) {
+            console.error("Auto-activate failed", err);
+          }
+        }
+      } else {
+        const errData = await res.json();
+        alert("Fehler beim Upload: " + (errData.error || res.statusText));
+      }
+    } catch (err) {
+      alert("Fehler beim Upload: " + err.message);
+    }
+    elements.manualUploadInput.value = '';
+  });
+}
+if (elements.btnRefreshManuals) {
+  elements.btnRefreshManuals.addEventListener('click', loadManuals);
+}
+
+async function populateManualsDropdowns() {
+  try {
+    const res = await fetch('/api/manuals');
+    const data = await res.json();
+    const manuals = data.manuals || [];
+    
+    // For Setup View
+    if (elements.chatManualsSelect) {
+      const prevSetupValues = Array.from(elements.chatManualsSelect.selectedOptions).map(opt => opt.value);
+      elements.chatManualsSelect.innerHTML = '';
+      manuals.forEach(m => {
+        const option = document.createElement('option');
+        option.value = m.filename;
+        option.textContent = m.filename;
+        if (prevSetupValues.includes(m.filename)) option.selected = true;
+        elements.chatManualsSelect.appendChild(option);
+      });
+    }
+    
+    // For Active Chat Header
+    if (elements.headerManualsSelect) {
+      const prevHeaderValues = Array.from(elements.headerManualsSelect.selectedOptions).map(opt => opt.value);
+      elements.headerManualsSelect.innerHTML = '';
+      manuals.forEach(m => {
+        const option = document.createElement('option');
+        option.value = m.filename;
+        option.textContent = m.filename;
+        if (prevHeaderValues.includes(m.filename)) option.selected = true;
+        elements.headerManualsSelect.appendChild(option);
+      });
+    }
+  } catch(err) {
+    console.error("Failed to populate manuals dropdowns", err);
+  }
+}
 
 // --- IMPORT MANAGER ACTIONS ---
 function resetImportProgress() {
@@ -2186,6 +2428,67 @@ async function loadDashboard() {
         }
       }
     } catch (e) { console.error('Todos fetch error:', e); }
+
+    // Fetch Levers
+    try {
+      const leversRes = await fetch('/api/levers');
+      const leversData = await leversRes.json();
+      const leversList = document.getElementById('dashboard-levers');
+      if (leversList) {
+        leversList.innerHTML = '';
+        if (leversData && leversData.levers && leversData.levers.length > 0) {
+          leversData.levers.forEach(l => {
+            const li = document.createElement('li');
+            li.innerHTML = `<strong><span style="color:var(--color-primary)">[${escapeHtml(l.category)}]</span> ${escapeHtml(l.title)}</strong><br><span style="font-size:0.9em;color:var(--color-text-muted)">${escapeHtml(l.description)}</span>`;
+            leversList.appendChild(li);
+          });
+          
+          if (leversData.lastUpdated) {
+            const dateStr = new Date(leversData.lastUpdated).toLocaleDateString('de-DE');
+            const metaLi = document.createElement('li');
+            metaLi.style.fontSize = '0.8em';
+            metaLi.style.color = 'var(--color-text-muted)';
+            metaLi.style.textAlign = 'right';
+            metaLi.style.marginTop = '10px';
+            metaLi.innerHTML = `<em>Letzter Scan: ${dateStr}</em>`;
+            leversList.appendChild(metaLi);
+          }
+        } else {
+          leversList.innerHTML = '<li>Es wurden noch keine Hebel extrahiert. Der Scanner läuft im Hintergrund.</li>';
+        }
+        
+        // Render Progressions
+        const progressionsList = document.getElementById('dashboard-progressions');
+        console.log("ProgressionsList DOM Element:", progressionsList);
+        console.log("Progressions Data:", leversData.progressions);
+        
+        if (progressionsList) {
+          progressionsList.innerHTML = '';
+          if (leversData && leversData.progressions && leversData.progressions.length > 0) {
+            leversData.progressions.forEach(p => {
+              const li = document.createElement('li');
+              let trendIcon = '';
+              let trendColor = '';
+              if (p.trend.toLowerCase().includes('verbesserung')) {
+                trendIcon = '<i class="fa-solid fa-arrow-trend-up"></i>';
+                trendColor = 'var(--color-emerald)';
+              } else if (p.trend.toLowerCase().includes('verschlechterung')) {
+                trendIcon = '<i class="fa-solid fa-arrow-trend-down"></i>';
+                trendColor = 'var(--color-rose)';
+              } else {
+                trendIcon = '<i class="fa-solid fa-minus"></i>';
+                trendColor = 'var(--color-amber)';
+              }
+              
+              li.innerHTML = `<strong><span style="color:${trendColor}">${trendIcon} [${escapeHtml(p.topic)}]</span> ${escapeHtml(p.trend)}</strong><br><span style="font-size:0.9em;color:var(--color-text-muted)">${escapeHtml(p.details)}</span>`;
+              progressionsList.appendChild(li);
+            });
+          } else {
+            progressionsList.innerHTML = '<li>Noch keine historischen Trend-Daten (Map-Reduce) verfügbar.</li>';
+          }
+        }
+      }
+    } catch (e) { console.error('Levers fetch error:', e); }
     
   } catch (err) {
     console.error("Dashboard laden fehlgeschlagen:", err);

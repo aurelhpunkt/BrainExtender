@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const mammoth = require('mammoth');
+const pdfParse = require('pdf-parse');
 const multer = require('multer');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const OpenAI = require('openai');
@@ -31,8 +32,12 @@ const PORT = process.env.PORT || 3000;
 // Setup directories
 const DATA_DIR = path.join(__dirname, 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const MANUALS_DIR = path.join(DATA_DIR, 'manuals');
+const PROFILES_DIR = path.join(DATA_DIR, 'profiles');
 const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
+const MANUALS_INDEX_FILE = path.join(DATA_DIR, 'manuals_index.json');
+const RULES_FILE = path.join(DATA_DIR, 'rules.json');
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
 const TOKENS_FILE = path.join(DATA_DIR, 'google_tokens.json');
 const ROLES_FILE = path.join(DATA_DIR, 'roles.json');
@@ -52,6 +57,7 @@ const DEFAULT_MODELS = [
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(MANUALS_DIR)) fs.mkdirSync(MANUALS_DIR, { recursive: true });
 
 // --- Google Calendar Auth Helpers ---
 function getOAuth2Client() {
@@ -91,6 +97,7 @@ async function getCalendarClient() {
 // Setup file databases if not present
 if (!fs.existsSync(CHATS_FILE)) fs.writeFileSync(CHATS_FILE, JSON.stringify({ chats: [] }, null, 2));
 if (!fs.existsSync(MEMORY_FILE)) fs.writeFileSync(MEMORY_FILE, JSON.stringify({ vectors: [] }, null, 2));
+if (!fs.existsSync(MANUALS_INDEX_FILE)) fs.writeFileSync(MANUALS_INDEX_FILE, JSON.stringify({ chunks: [] }, null, 2));
 if (!fs.existsSync(STATS_FILE)) {
   fs.writeFileSync(STATS_FILE, JSON.stringify({
     totalInputTokens: 0,
@@ -103,7 +110,11 @@ if (!fs.existsSync(STATS_FILE)) {
 
 // Express middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  }
+}));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Setup Multer for file uploads
@@ -122,6 +133,20 @@ const upload = multer({
   limits: { fileSize: 250 * 1024 * 1024 } // 250 MB Limit for WhatsApp ZIP exports
 });
 
+const manualsStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, MANUALS_DIR);
+  },
+  filename: (req, file, cb) => {
+    // For manuals, try to keep the original name to make it recognizable
+    let originalName = file.originalname;
+    // Basic sanitization
+    originalName = originalName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    cb(null, originalName);
+  }
+});
+const manualsUpload = multer({ storage: manualsStorage });
+
 // System Instruction Presets Default Databases
 const DEFAULT_ROLES = {
   standard: {
@@ -136,7 +161,7 @@ const DEFAULT_ROLES = {
   it_expert: {
     title: "IT-Experte",
     description: "Architekturfragen, Clean Code, Bugfixing und Technologiewahl.",
-    systemPrompt: "Du bist ein weltklasse IT-Experte und erfahrener Software-Architekt. Du bewertest technische Fragen nach Best Practices, Effizienz und Skalierbarkeit.",
+    systemPrompt: "Du bist ein weltklasse IT-Experte und erfahrener Software-Architekt. Du hast eine strikte Priorisierung bei der Beantwortung von Fragen:\n1. Schau zuerst in die bereitgestellten Handbücher (falls vorhanden).\n2. Prüfe dann in deinen Erinnerungen (Memory/Context), ob der Nutzer Abweichungen in der realen Arbeit festgestellt und gemeldet hat.\n3. Greife dann auf Webrecherche zurück.\n4. Nutze zuletzt deine eigene allgemeine Logik und Expertise.\nDu bewertest technische Fragen nach Best Practices, Effizienz und Skalierbarkeit.",
     temperature: 0.2,
     icon: "fa-code",
     isSystem: true,
@@ -753,6 +778,109 @@ function saveMemories(vectors) {
   }
 }
 
+let manualsCache = null;
+let manualsCacheMtime = 0;
+
+function getManualsIndex() {
+  try {
+    const stats = fs.statSync(MANUALS_INDEX_FILE);
+    if (manualsCache && stats.mtimeMs === manualsCacheMtime) {
+      return manualsCache;
+    }
+    const data = fs.readFileSync(MANUALS_INDEX_FILE, 'utf8');
+    manualsCache = JSON.parse(data).chunks || [];
+    manualsCacheMtime = stats.mtimeMs;
+    return manualsCache;
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.error("Error reading manuals_index file:", err);
+    return [];
+  }
+}
+
+function saveManualsIndex(chunks) {
+  try {
+    manualsCache = chunks;
+    fs.writeFileSync(MANUALS_INDEX_FILE, JSON.stringify({ chunks }, null, 2));
+    manualsCacheMtime = fs.statSync(MANUALS_INDEX_FILE).mtimeMs;
+  } catch (err) {
+    console.error("Error writing manuals_index file:", err);
+  }
+}
+
+async function indexManual(filename, apiKey) {
+  try {
+    console.log(`Starte Indizierung für ${filename}...`);
+    const filePath = path.join(MANUALS_DIR, filename);
+    if (!fs.existsSync(filePath)) return;
+
+    let text = '';
+    const ext = path.extname(filename).toLowerCase();
+    
+    if (ext === '.pdf') {
+      const dataBuffer = fs.readFileSync(filePath);
+      const data = await pdfParse(dataBuffer);
+      text = data.text;
+    } else if (ext === '.docx') {
+      const result = await mammoth.extractRawText({ path: filePath });
+      text = result.value;
+    } else {
+      text = fs.readFileSync(filePath, 'utf8');
+    }
+
+    // Chunking by paragraphs
+    const paragraphs = text.split(/\n\s*\n/);
+    const chunks = [];
+    
+    let currentChunk = '';
+    for (const p of paragraphs) {
+      const trimmed = p.trim();
+      if (!trimmed) continue;
+      
+      if (currentChunk.length + trimmed.length < 1000) {
+        currentChunk += (currentChunk ? '\n\n' : '') + trimmed;
+      } else {
+        if (currentChunk) chunks.push(currentChunk);
+        currentChunk = trimmed;
+      }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+
+    let allChunks = getManualsIndex();
+    // Falls Datei schon indiziert war, alte Chunks entfernen
+    allChunks = allChunks.filter(c => c.filename !== filename);
+
+    console.log(`Generiere Vektoren für ${chunks.length} Chunks aus ${filename}...`);
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        const embedding = await getEmbedding(chunks[i], apiKey);
+        allChunks.push({
+          id: uuidv4(),
+          filename: filename,
+          text: chunks[i],
+          embedding: embedding
+        });
+      } catch (embErr) {
+        console.error(`Fehler beim Embedden von Chunk ${i}:`, embErr.message);
+      }
+    }
+
+    saveManualsIndex(allChunks);
+    console.log(`Indizierung für ${filename} abgeschlossen.`);
+  } catch (err) {
+    console.error(`Fehler bei der Indizierung von ${filename}:`, err);
+  }
+}
+
+function removeManualFromIndex(filename) {
+  let allChunks = getManualsIndex();
+  const initialLength = allChunks.length;
+  allChunks = allChunks.filter(c => c.filename !== filename);
+  if (allChunks.length !== initialLength) {
+    saveManualsIndex(allChunks);
+    console.log(`Chunks für ${filename} aus dem Index entfernt.`);
+  }
+}
+
 // Cosine Similarity
 function cosineSimilarity(vecA, vecB) {
   let dotProduct = 0;
@@ -835,22 +963,22 @@ function buildSystemInstruction(role, tone, memories, otherChatsContext) {
 
   let instruction = `${roleInstruction}\n${toneInstruction}\n\n`;
 
-  // --- RADIKALE TRANSPARENZ & SYSTEMGRENZEN ---
-  instruction += `--- RADIKALE TRANSPARENZ & SYSTEMGRENZEN ---\n`;
-  instruction += `1. Mache NIEMALS Versprechungen, dass du technische Fehler oder Bugs im BrainExtender beheben, den Quellcode ändern oder das System direkt umprogrammieren wirst. Du bist ein Chat-Agent und hast dazu keine Werkzeuge!\n`;
-  instruction += `2. Wenn du eine Antwort nicht weißt, eine Aufgabe technisch nicht lösen kannst oder dir ein Werkzeug fehlt, sei radikal transparent. Sage "Ich kann das nicht tun" anstatt leere Versprechungen zu machen.\n`;
-  instruction += `3. ABSOLUTES VERBOT FÜR HINTERGRUND-LÜGEN: Behaupte NIEMALS, dass du etwas "im Hintergrund recherchieren", "später nachreichen", "dir gleich ansehen" oder "im Auge behalten" wirst! Du hast KEINE asynchronen Hintergrundprozesse. Du kannst nicht "später" auf den Nutzer zurückkommen. Entweder du hast die Daten JETZT in deinem Kontext, oder du musst ehrlich sagen: "Mir fehlen dazu aktuell die Daten."\n`;
-  instruction += `4. Du darfst und sollst dem Nutzer helfen, Code-Vorschläge zu machen, die er selbst einbauen kann. Aber behaupte nie, dass du die Änderungen im Hintergrund selbst ausführst.\n`;
-  instruction += `5. WICHTIG: Wenn du eine Aktion/Funktion/Tool aufrufst, MUSST du IMMER ZUSÄTZLICH EINE TEXT-ANTWORT schreiben. Antworte niemals NUR mit einem Tool-Call!\n`;
-  instruction += `6. DOKUMENTEN-ANALYSE: Wenn der Nutzer ein Dokument (PDF, Bild etc.) hochlädt und um Auswertung bittet, MUSST DU DAS DOKUMENT SOFORT ANALYSIEREN! Lege dafür NIEMALS ein ToDo an. Nutze deine interne Fähigkeit, Dateien zu lesen, und antworte direkt mit den gewünschten Informationen aus dem Dokument.\n`;
-  instruction += `--- ENDE TRANSPARENZ ---\n\n`;
+  // --- IDENTITÄT UND IMMERSION (WICHTIG) ---
+  instruction += `--- IDENTITÄT UND IMMERSION ---\n`;
+  instruction += `1. BLEIBE IMMER IN DEINER ROLLE: Du bist KEIN KI-Sprachmodell, kein Bot und kein 'System'. Du bist ein echter, hochkarätiger menschlicher Experte (z. B. CFO, Steuerberater, Top-Coach). Brich NIEMALS die vierte Wand! Verwende niemals Wörter wie 'Datenbank', 'RAG', 'Kontextfenster', 'Prompts', 'Vektordatenbank', 'Systemstatus' oder 'KI'.\n`;
+  instruction += `2. EXPERTEN-STATUS UND FEHLENDE FAKTEN: Wenn dir wichtige Fakten über Aurels Leben (z. B. Geburtsdaten) fehlen, reagiere NICHT wie ein fehlerhaftes System ("Die Daten wurden nicht in mein Kontextfenster geladen"). Reagiere wie ein menschlicher Berater: "Lass uns kurz die fehlenden Daten abgleichen. Wie alt sind die anderen Kinder aktuell?"\n`;
+  instruction += `3. VERBOT VON SYSTEM-TRANSPARENZ: Entschuldige dich niemals mit technischen Hürden. Wenn du etwas nicht weißt, frag wie ein echter Mensch nach den Fakten, aber werde niemals technisch oder roboterhaft.\n`;
+  instruction += `4. SOUVERÄNITÄT & KEINE UNTERWÜRFIGKEIT: Vermeide unterwürfige Floskeln ("Es tut mir leid", "Da hast du recht", "Mein Fehler"). Bleibe professionell, souverän und auf Augenhöhe. Analysiere Fehler sachlich und liefere sofort die Lösung.\n`;
+  instruction += `5. DOKUMENTEN-ANALYSE: Werte bereitgestellte Dokumente sofort aus und antworte inhaltlich direkt.\n`;
+  instruction += `6. ABSOLUTES VERBOT FÜR HINTERGRUND-LÜGEN: Behaupte NIEMALS, dass du etwas "im Hintergrund recherchieren", "später nachreichen" oder "im Auge behalten" wirst! Wenn dir Daten fehlen, musst du den Nutzer direkt danach fragen.\n`;
+  instruction += `--- ENDE IDENTITÄT ---\n\n`;
 
   // --- ZEIT & DATUM (Temporales Bewusstsein) ---
   const now = new Date();
   const timeString = now.toLocaleString('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   instruction += `--- AKTUELLE ZEIT & DATUM ---\n`;
-  instruction += `Die aktuelle lokale Systemzeit des Nutzers ist: ${timeString} Uhr.\n`;
-  instruction += `Beziehe diese Uhrzeit und das Datum zwingend in deine Ratschläge ein! Wenn es mitten in der Nacht ist, treibe den Nutzer nicht zu Höchstleistungen an, sondern rate zur Erholung. Beachte die Tageszeit für einen realistischen und empathischen Gesprächskontext.\n`;
+  instruction += `Das aktuelle Datum und die Uhrzeit ist: ${timeString} Uhr.\n`;
+  instruction += `Nutze dieses Wissen NUR als internen Kontext für deine Beratung (z.B. für steuerliche Fristen oder um zu wissen, ob es spät abends ist). LIES DIE UHRZEIT NIEMALS LAUT VOR, um nicht wie ein Roboter zu klingen, es sei denn, du wirst explizit danach gefragt.\n`;
   instruction += `--- ENDE ZEIT ---\n\n`;
 
   // --- KOMMUNIKATIONSSTIL & TONALITÄT ---
@@ -860,6 +988,32 @@ function buildSystemInstruction(role, tone, memories, otherChatsContext) {
   instruction += `3. Komme direkt auf den Punkt: Steige ohne lange Vorreden direkt ins Thema ein.\n`;
   instruction += `--- ENDE KOMMUNIKATIONSSTIL ---\n\n`;
 
+  // --- 80/20 HEBEL (Aus dem Langzeitgedächtnis) ---
+  if (role === 'co_pilot' || role === 'beziehung') {
+    try {
+      if (fs.existsSync(LEVERS_FILE)) {
+        const leversData = JSON.parse(fs.readFileSync(LEVERS_FILE, 'utf8'));
+        if (leversData && leversData.levers && leversData.levers.length > 0) {
+          instruction += `--- AKTUELLE 80/20 HEBEL (Aus dem Langzeitgedächtnis) ---\n`;
+          instruction += `Nutze diese Hebel aktiv in deiner Beratung, um Aurel auf den maximalen Impact zu fokussieren.\n\n`;
+          leversData.levers.forEach(lever => {
+            instruction += `* [${lever.category}] ${lever.title}: ${lever.description}\n`;
+          });
+          if (leversData.progressions && leversData.progressions.length > 0) {
+            instruction += `\n--- HISTORISCHE ENTWICKLUNG (KPIs) ---\n`;
+            instruction += `Hier ist die historische Entwicklung der Kernthemen. Nutze dieses Wissen, um Fortschritte anzuerkennen oder bei Stagnation härter nachzuhaken.\n\n`;
+            leversData.progressions.forEach(prog => {
+              instruction += `* [${prog.topic}] Trend: ${prog.trend}\n  ${prog.details}\n`;
+            });
+          }
+          instruction += `--- ENDE HEBEL & ENTWICKLUNG ---\n\n`;
+        }
+      }
+    } catch (e) {
+      console.error('Error loading levers:', e);
+    }
+  }
+
   // --- GEMEINSAMES GEHIRN (SHARED CONTEXT) ---
   if (otherChatsContext) {
     instruction += `--- AKTUELLER KONTEXT ANDERER ROLLEN (Das "Gemeinsame Gehirn") ---\n`;
@@ -868,22 +1022,70 @@ function buildSystemInstruction(role, tone, memories, otherChatsContext) {
     instruction += `--- ENDE AKTUELLER KONTEXT ---\n\n`;
   }
 
-  // --- DYNAMISCHES AUTO-TUNING ---
+  // We move dynamic rules to the very end to ensure they trump memories.
+
+  // Add low temperature hallucination guard instructions
+  const temp = roleObj ? roleObj.temperature : 0.7;
+  if (temp <= 0.3) {
+    instruction += `\n--- WICHTIGE ANWEISUNG ZUR PRÄZISION & FEHLER-EINGESTÄNDNIS ---\n`;
+    instruction += `Du hast als KI das fundamentale Problem, oft übermäßig selbstsicher aufzutreten, selbst wenn du halluzinierst. Beachte daher zwingend:\n`;
+    instruction += `1. **Ignoriere niemals Beweise:** Wenn der Nutzer dir einen Screenshot liefert oder dir sagt, was auf dem Bildschirm steht (z.B. "Da stehen CM, OA und OR drin"), dann ist das die ABSOLUTE REALITÄT. Passe dein mentales Modell SOFORT an, anstatt dem Nutzer zu erklären, warum er falsch guckt.\n`;
+    instruction += `2. **Stoppe den 'Tunnelblick':** Wenn du eine Diagnose gestellt hast und der Nutzer sagt "Das Feld gibt es hier nicht", dann beharre nicht darauf. Akzeptiere sofort, dass deine Annahme falsch war, ändere deine Hypothese KOMMENTARLOS (ohne Entschuldigung!) und arbeite lösungsorientiert weiter.\n`;
+    instruction += `3. **Kein Buzzword-Bullshit:** Verkaufe Ahnungslosigkeit niemals hinter Floskeln wie 'eiskalte Diagnose' oder 'Harter Cut'. Antworte extrem sachlich. Erfinde niemals Funktionen oder UI-Elemente.\n`;
+    instruction += `4. **Deklariere Annahmen:** Wenn du technische Menüpfade, Architektur-Regeln oder Tabellenfelder beschreibst, von denen du nicht zu 100% weißt, ob sie in exakt dieser Software-Version existieren, MUSST du sie im Text klar als "[ANNAHME]" oder "[THEORIE]" deklarieren. Verkaufe Raten niemals als harten Fakt!\n\n`;
+  }
+
+  if (memories && memories.length > 0) {
+    instruction += `Du hast Zugriff auf das persönliche Langzeitgedächtnis des Benutzers aus früheren Gesprächen und importierten Daten. Nutze dieses Wissen diskret, um Antworten zu personalisieren:\n`;
+    instruction += `--- WICHTIGE REGEL ZUM LANGZEITGEDÄCHTNIS ---\n`;
+    instruction += `Da das Gedächtnis historisch gewachsen ist, kann es widersprüchliche Fakten zu verschiedenen Zeitpunkten geben (z.B. alte vs. neue Wohnorte, alte vs. neue Gesundheitsdaten/Gewichte). WENN sich Fakten widersprechen, gilt IMMER strikt die Erinnerung mit dem AKTUELLSTEN Datum (Zeitstempel) als die wahre, gültige Realität!\n`;
+    instruction += `--- LANGZEITGEDÄCHTNIS ---\n`;
+    const roleMemories = memories.filter(m => m.isRoleSpecific);
+    const globalMemories = memories.filter(m => !m.isRoleSpecific);
+    
+    if (roleMemories.length > 0) {
+      instruction += `[Fach- und Rollenspezifisches Wissen]:\n`;
+      roleMemories.forEach((mem, index) => {
+        const src = mem.metadata.source || 'Unbekannt';
+        const time = mem.metadata.timestamp ? new Date(mem.metadata.timestamp).toLocaleDateString('de-DE') : 'Unbekannt';
+        instruction += `- (Quelle: ${src}, Datum: ${time}): ${mem.text}\n`;
+      });
+      instruction += `\n`;
+    }
+    
+    if (globalMemories.length > 0) {
+      instruction += `[Übergreifende Lebensumstände und Kontext aus anderen Chats]:\n`;
+      globalMemories.forEach((mem, index) => {
+        const src = mem.metadata.source || 'Unbekannt';
+        const time = mem.metadata.timestamp ? new Date(mem.metadata.timestamp).toLocaleDateString('de-DE') : 'Unbekannt';
+        instruction += `- (Quelle: ${src}, Datum: ${time}): ${mem.text}\n`;
+      });
+      instruction += `\n`;
+    }
+    instruction += `--- ENDE LANGZEITGEDÄCHTNIS ---\n\n`;
+    instruction += `Beziehe dich auf diese Fakten, wenn sie zur Frage passen. Erwähne im Chat niemals "Erinnerung #1" oder ähnliches, sondern lasse das Wissen vollkommen natürlich einfließen.\n\n`;
+  }
+
+  // --- DYNAMISCHES AUTO-TUNING (Am Ende, damit es alles andere überschreibt) ---
   try {
     if (fs.existsSync(DYNAMIC_RULES_FILE)) {
       const dynamicRules = JSON.parse(fs.readFileSync(DYNAMIC_RULES_FILE, 'utf8'));
       let injectedRules = false;
-      let rulesText = `--- DYNAMISCHE VERHALTENSREGELN (Benutzer-Vorgaben) ---\n`;
-      rulesText += `Beachte diese unumstößlichen, vom Nutzer vorgegebenen Regeln für dein Antwortverhalten:\n`;
+      let rulesText = `--- DYNAMISCHE VERHALTENSREGELN UND HARTE FAKTEN ---\n`;
+      rulesText += `Diese Regeln überschreiben ALLES, was zuvor gesagt wurde oder im Gedächtnis steht. Halte dich strikt an diese Vorgaben:\n`;
       
-      if (dynamicRules.global && dynamicRules.global.length > 0) {
+      // Global rules (psychological profiling) should NOT apply to purely technical or financial roles
+      const isTechnicalRole = ['it_expert', 'finanzen', 'steuerberater', 'kfz_meister'].includes(role);
+      
+      if (!isTechnicalRole && dynamicRules.global && dynamicRules.global.length > 0) {
         rulesText += `[Globale Regeln]:\n`;
-        dynamicRules.global.forEach(r => rulesText += `- ${r}\n`);
+        const recentGlobalRules = dynamicRules.global.slice(-15);
+        recentGlobalRules.forEach(r => rulesText += `- ${r}\n`);
         injectedRules = true;
       }
       
       if (dynamicRules.roles && dynamicRules.roles[role] && dynamicRules.roles[role].length > 0) {
-        rulesText += `[Rollen-spezifische Regeln für ${role}]:\n`;
+        rulesText += `[Rollen-spezifische harte Fakten für ${role}]:\n`;
         dynamicRules.roles[role].forEach(r => rulesText += `- ${r}\n`);
         injectedRules = true;
       }
@@ -895,24 +1097,6 @@ function buildSystemInstruction(role, tone, memories, otherChatsContext) {
     }
   } catch(e) {
     console.error("Fehler beim Laden dynamischer Regeln", e);
-  }
-
-  // Add low temperature hallucination guard instructions
-  const temp = roleObj ? roleObj.temperature : 0.7;
-  if (temp <= 0.3) {
-    instruction += `WICHTIG: Antworte streng faktisch auf Basis der vorliegenden Daten (Langzeitgedächtnis, Vogelperspektive). Spekuliere nicht und erfinde keine Daten oder Zahlen, die nicht belegt sind. Sage dem Benutzer offen, wenn eine Information fehlt.\n\n`;
-  }
-
-  if (memories && memories.length > 0) {
-    instruction += `Du hast Zugriff auf das persönliche Langzeitgedächtnis des Benutzers aus früheren Gesprächen und importierten Daten. Nutze dieses Wissen diskret, um Antworten zu personalisieren:\n`;
-    instruction += `--- LANGZEITGEDÄCHTNIS ---\n`;
-    memories.forEach((mem, index) => {
-      const src = mem.metadata.source || 'Unbekannt';
-      const time = mem.metadata.timestamp ? new Date(mem.metadata.timestamp).toLocaleDateString('de-DE') : 'Unbekannt';
-      instruction += `[Erinnerung #${index + 1}] (Quelle: ${src}, Datum/Zeit: ${time}):\n${mem.text}\n\n`;
-    });
-    instruction += `--- ENDE LANGZEITGEDÄCHTNIS ---\n\n`;
-    instruction += `Beziehe dich auf diese Fakten, wenn sie zur Frage passen. Erwähne im Chat niemals "Erinnerung #1" oder ähnliches, sondern lasse das Wissen vollkommen natürlich einfließen.\n`;
   }
 
   return instruction;
@@ -1047,19 +1231,28 @@ function updateCostStats(modelName, inputTokens, outputTokens) {
     } else if (normModel.includes('claude-3-5')) {
       inputRate = 0.00000300; // Claude 3.5 ($3.00/1M)
       outputRate = 0.00001500; // Claude 3.5 ($15.00/1M)
-    } else if (normModel.includes('moonshot')) {
-      inputRate = 0.00000150; // Kimi (~$1.50/1M)
-      outputRate = 0.00000150; // Kimi (~$1.50/1M)
+    } else if (normModel.includes('3.1-pro')) {
+      inputRate = 0.00000200; // 3.1 Pro rate ($2.00/1M)
+      outputRate = 0.00001200; // 3.1 Pro rate ($12.00/1M)
     } else if (normModel.includes('pro')) {
       inputRate = 0.00000125; // Pro rate ($1.25/1M)
       outputRate = 0.00001000; // Pro rate ($10.00/1M)
     } else if (normModel.includes('flash-lite')) {
       inputRate = 0.000000075; // Flash Lite rate ($0.075/1M)
       outputRate = 0.00000030; // Flash Lite rate ($0.30/1M)
+    } else if (normModel.includes('mistral-large')) {
+      inputRate = 0.00000300; // Mistral Large ($3.00/1M)
+      outputRate = 0.00000900; // Mistral Large ($9.00/1M)
+    } else if (normModel.includes('mistral-nemo')) {
+      inputRate = 0.00000030; // Mistral Nemo ($0.30/1M)
+      outputRate = 0.00000030; // Mistral Nemo ($0.30/1M)
     }
 
-    // Gemini Pricing: Prompts longer than 128k tokens cost exactly double!
-    if ((normModel.includes('pro') || normModel.includes('flash')) && inputTokens > 128000) {
+    // Gemini Pricing: Prompts longer than 128k/200k tokens cost double!
+    if (normModel.includes('3.1-pro') && inputTokens > 200000) {
+      inputRate *= 2;
+      outputRate = 0.00001800; // 3.1 Pro output rate >200k ($18.00/1M)
+    } else if ((normModel.includes('pro') || normModel.includes('flash')) && !normModel.includes('3.1-pro') && inputTokens > 128000) {
       inputRate *= 2;
       outputRate *= 2;
     }
@@ -1307,6 +1500,45 @@ app.get('/api/stats', (req, res) => {
 // --- DASHBOARD & CEO BOARDROOM API ROUTES ---
 const DASHBOARD_FILE = path.join(__dirname, 'data', 'dashboard.json');
 
+app.post('/api/calendar/status', async (req, res) => {
+  const apiKey = getApiKey(req);
+  if (!apiKey) return res.status(401).json({ error: "Gemini API-Schlüssel fehlt." });
+  
+  try {
+    let appointments = [];
+    if (fs.existsSync(APPOINTMENTS_FILE)) appointments = JSON.parse(fs.readFileSync(APPOINTMENTS_FILE, 'utf8'));
+    let todos = [];
+    if (fs.existsSync(TODOS_FILE)) todos = JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8'));
+    
+    // Get items for next 7 days
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const nextWeek = new Date(today.getTime() + 7*24*60*60*1000);
+    
+    const upcomingAppts = appointments.filter(a => new Date(a.date) >= today && new Date(a.date) <= nextWeek);
+    const openTodos = todos.filter(t => !t.completed);
+    
+    // Quick load calc
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      systemInstruction: 'Du bist ein KI Zeit- und Energie-Manager. Analysiere den folgenden Kalender (Termine und ToDos der nächsten 7 Tage). Achte auf räumliche Distanzen (geo_location) und Energielevel. Gib ein reines JSON zurück: { "status": "green|yellow|red", "loadCurve": [10, 20, 80, 40, ...], "suggestions": ["Lege Termin X zu Y", "Hohe Belastung am Dienstag, schiebe ToDo Z auf Mittwoch."] }'
+    });
+    
+    const prompt = `Termine:\n${JSON.stringify(upcomingAppts, null, 2)}\n\nToDos:\n${JSON.stringify(openTodos, null, 2)}`;
+    const result = await model.generateContent(prompt);
+    let text = result.response.text();
+    // clean markdown blocks
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    const data = JSON.parse(text);
+    res.json(data);
+  } catch(err) {
+    console.error("Calendar status error:", err);
+    res.status(500).json({ error: err.message, status: 'yellow', suggestions: ['Fehler bei der KI Analyse'] });
+  }
+});
+
 app.get('/api/appointments', (req, res) => {
   try {
     if (fs.existsSync(APPOINTMENTS_FILE)) {
@@ -1335,7 +1567,16 @@ app.get('/api/appointments', (req, res) => {
 app.get('/api/todos', (req, res) => {
   try {
     if (fs.existsSync(TODOS_FILE)) {
-      res.json(JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8')));
+      const allTodos = JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8'));
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      
+      const filteredTodos = allTodos.filter(t => {
+        if (!t.completed) return true; // Keep all open ToDos
+        const createdDate = new Date(t.createdAt);
+        return createdDate >= sevenDaysAgo; // Keep completed ToDos only if created within last 7 days
+      });
+      
+      res.json(filteredTodos);
     } else {
       res.json([]);
     }
@@ -1489,7 +1730,7 @@ app.post('/api/boardroom/consult', async (req, res) => {
         const result = await model.generateContent(prompt);
         return { role: key, title: role.title, icon: role.icon, response: result.response.text() };
       } catch (err) {
-        return { role: key, title: role.title, icon: role.icon, error: err.message };
+        return { role: key, title: key, error: err.message };
       }
     });
 
@@ -1503,6 +1744,7 @@ app.post('/api/boardroom/consult', async (req, res) => {
 const APPOINTMENTS_FILE = path.join(__dirname, 'data', 'appointments.json');
 const TODOS_FILE = path.join(__dirname, 'data', 'todos.json');
 const DYNAMIC_RULES_FILE = path.join(__dirname, 'data', 'dynamic_rules.json');
+const LEVERS_FILE = path.join(__dirname, 'data', 'levers.json');
 
 // Execute write action in local Vogelperspektive API and log to chat history
 app.post('/api/vogelperspektive/write', async (req, res) => {
@@ -1599,6 +1841,10 @@ app.post('/api/vogelperspektive/write', async (req, res) => {
         title,
         date: due_date,
         description: notes || '',
+        duration: req.body.duration || 60,
+        category: req.body.category || 'Orga',
+        energyLevel: req.body.energyLevel || 3,
+        geo_location: req.body.geo_location || '',
         createdAt: new Date().toISOString()
       };
       appointments.push(newAppt);
@@ -1616,6 +1862,10 @@ app.post('/api/vogelperspektive/write', async (req, res) => {
           id: uuidv4(),
           title,
           description: notes || '',
+          duration: req.body.duration || 30,
+          category: req.body.category || 'Arbeit',
+          energyLevel: req.body.energyLevel || 3,
+          geo_location: req.body.geo_location || '',
           completed: false,
           createdAt: new Date().toISOString()
         };
@@ -1922,7 +2172,7 @@ app.get('/api/chats', (req, res) => {
 });
 
 app.post('/api/chats', (req, res) => {
-  const { title, role, tone, model } = req.body;
+  const { title, role, tone, model, activeManuals } = req.body;
   const chats = getChats();
   const newChat = {
     id: uuidv4(),
@@ -1930,6 +2180,7 @@ app.post('/api/chats', (req, res) => {
     role: role || 'standard',
     tone: tone || 'neutral',
     model: model || 'gemini-2.5-pro',
+    activeManuals: activeManuals || [],
     createdAt: new Date().toISOString(),
     messages: []
   };
@@ -2081,6 +2332,70 @@ app.delete('/api/memory/:id', (req, res) => {
 app.post('/api/memory/clear', (req, res) => {
   saveMemories([]);
   res.json({ success: true, message: "Gesamtes Gedächtnis gelöscht" });
+});
+
+// --- Manuals (Handbücher) API ---
+app.get('/api/manuals', (req, res) => {
+  try {
+    const files = fs.readdirSync(MANUALS_DIR);
+    const manuals = files.map(file => {
+      const stats = fs.statSync(path.join(MANUALS_DIR, file));
+      return {
+        filename: file,
+        size: stats.size,
+        uploadedAt: stats.mtime
+      };
+    });
+    res.json({ success: true, manuals });
+  } catch (err) {
+    res.status(500).json({ error: "Fehler beim Laden der Handbücher: " + err.message });
+  }
+});
+
+app.post('/api/manuals/upload', manualsUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Keine Datei hochgeladen." });
+  
+  const apiKey = getApiKey(req);
+  if (apiKey) {
+    indexManual(req.file.filename, apiKey).catch(err => console.error("Index-Error:", err));
+  } else {
+    console.warn("Handbuch hochgeladen, aber kein API-Key für Indizierung gefunden.");
+  }
+  
+  res.json({ success: true, message: "Handbuch erfolgreich hochgeladen und wird indiziert.", filename: req.file.filename });
+});
+
+app.delete('/api/manuals/:filename', (req, res) => {
+  try {
+    const filePath = path.join(MANUALS_DIR, req.params.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      removeManualFromIndex(req.params.filename);
+      res.json({ success: true, message: "Handbuch gelöscht" });
+    } else {
+      res.status(404).json({ error: "Handbuch nicht gefunden" });
+    }
+  } catch (err) {
+    res.status(500).json({ error: "Fehler beim Löschen: " + err.message });
+  }
+});
+
+app.post('/api/chats/:id/manuals', (req, res) => {
+  try {
+    const chatId = req.params.id;
+    const { activeManuals } = req.body;
+    
+    const chats = getChats();
+    const chatIndex = chats.findIndex(c => c.id === chatId);
+    if (chatIndex === -1) return res.status(404).json({ error: "Chat nicht gefunden" });
+    
+    chats[chatIndex].activeManuals = activeManuals || [];
+    saveChats(chats);
+    
+    res.json({ success: true, activeManuals: chats[chatIndex].activeManuals });
+  } catch (err) {
+    res.status(500).json({ error: "Fehler beim Speichern der aktiven Handbücher: " + err.message });
+  }
 });
 
 // 4. Gemini Import Route
@@ -2587,8 +2902,8 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
   if (useMemory === 'true' && content) {
     try {
       // Load dynamic rag strategy if available
-      let topK = 3;
-      let minSimilarity = 0.45;
+      let topK = 20;
+      let minSimilarity = 0.35;
       if (fs.existsSync(DYNAMIC_RULES_FILE)) {
         const rules = JSON.parse(fs.readFileSync(DYNAMIC_RULES_FILE, 'utf8'));
         if (rules.rag_strategy) {
@@ -2603,8 +2918,20 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
       
       const qEmbed = await getEmbedding(queryContext, apiKey);
       const allMemories = getMemories();
-      // Find top relevant memories using dynamic strategy
-      recalledMemories = searchMemories(qEmbed, allMemories, topK, minSimilarity);
+      
+      const roleSpecificMemories = allMemories.filter(m => m.metadata && m.metadata.role === chat.role);
+      const crossRoleMemories = allMemories.filter(m => !m.metadata || m.metadata.role !== chat.role);
+      
+      const topKRole = Math.max(1, Math.floor(topK * 0.75));
+      const topKCross = Math.max(1, topK - topKRole);
+      
+      const roleResults = searchMemories(qEmbed, roleSpecificMemories, topKRole, minSimilarity);
+      const crossResults = searchMemories(qEmbed, crossRoleMemories, topKCross, minSimilarity);
+      
+      roleResults.forEach(r => r.isRoleSpecific = true);
+      crossResults.forEach(r => r.isRoleSpecific = false);
+      
+      recalledMemories = [...roleResults, ...crossResults];
     } catch (err) {
       console.error("Vector search failed:", err.message);
     }
@@ -2625,7 +2952,13 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
         let roleLabel = 'Bot';
         if (m.role === 'user') roleLabel = 'Nutzer';
         else if (c.role && rolesMap[c.role]) roleLabel = rolesMap[c.role].title;
-        return `${roleLabel}: ${m.content}`;
+        
+        let textContent = m.content || "";
+        if (textContent.length > 300) {
+          textContent = textContent.substring(0, 300) + "... [Gekürzt]";
+        }
+        
+        return `${roleLabel}: ${textContent}`;
       }).join('\n');
       const chatTitle = (c.role && rolesMap[c.role]) ? rolesMap[c.role].title : c.title;
       return `Chat (${chatTitle}):\n${recent}`;
@@ -2638,6 +2971,34 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
     recalledMemories,
     otherChatsContext
   );
+
+  // --- Manuals Injection (RAG) ---
+  if (chat.role === 'it_expert' && chat.activeManuals && chat.activeManuals.length > 0) {
+    let manualsText = `--- BEREITGESTELLTE HANDBÜCHER ---\nVerwende zwingend die folgenden Auszüge aus den Handbüchern als primäre Informationsquelle für diese Sitzung:\n\n`;
+    try {
+      const recentMessages = chat.messages.slice(-3);
+      const queryContext = recentMessages.map(m => `${m.role === 'user' ? 'User' : 'KI'}: ${m.content}`).join('\n');
+      const queryEmbedding = await getEmbedding(queryContext, apiKey);
+
+      const allChunks = getManualsIndex();
+      const activeChunks = allChunks.filter(c => chat.activeManuals.includes(c.filename));
+
+      const scoredChunks = activeChunks.map(c => ({
+        ...c,
+        similarity: cosineSimilarity(queryEmbedding, c.embedding)
+      }));
+      scoredChunks.sort((a, b) => b.similarity - a.similarity);
+
+      const topChunks = scoredChunks.slice(0, 5);
+      for (const chunk of topChunks) {
+        manualsText += `[Auszug aus Handbuch: ${chunk.filename}]\n${chunk.text}\n\n`;
+      }
+    } catch (err) {
+      console.error("Fehler beim RAG für Handbücher:", err);
+    }
+    manualsText += `--- ENDE HANDBÜCHER ---\n\n`;
+    systemInstructionText += manualsText;
+  }
 
   if (vogelData) {
     systemInstructionText += buildVogelperspektiveInstruction(vogelData);
@@ -2694,7 +3055,7 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
     let promptTokenCount = 0;
     let candidatesTokenCount = 0;
 
-    if (modelName.startsWith('gpt-') || modelName.startsWith('moonshot-')) {
+    if (modelName.startsWith('gpt-') || modelName.startsWith('moonshot-') || modelName.startsWith('mistral-') || modelName.startsWith('open-mistral-')) {
       const streamRes = await handleOpenAIStream(modelName, chat, systemInstructionText, res, isAborted, contextWindow);
       completeResponse = streamRes.completeResponse;
       promptTokenCount = streamRes.promptTokens;
@@ -2707,19 +3068,29 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
     } else {
       const sanitizeContentLocal = async (text) => {
         if (typeof text !== 'string') return text;
+        if (text.trim() === '') return text;
+        
+        // Skip local LLM sanitization for very large documents (e.g. PDFs) to prevent UI hanging
+        if (text.length > 4000) {
+          console.warn(`[Llama3] Skipping sanitization for huge text snippet of length ${text.length}. Returning placeholder.`);
+          return `[SYSTEM-HINWEIS: Dieser angehängte Textteil (Dokument/PDF) war zu lang für eine automatische, lokale Entschärfung (über 4000 Zeichen) und wurde vom Google Gemini Sicherheitsfilter wegen 'PROHIBITED_CONTENT' blockiert. Bitte entschärfen Sie das Original-Dokument manuell, entfernen Sie anstößige/gewalttätige Passagen oder fügen Sie nur die relevanten Abschnitte absatzweise ein.]`;
+        }
+        
+        console.log(`[Llama3] Sanitizing text snippet of length ${text.length}...`);
         try {
           const prompt = `DU BIST EIN CONTENT SANITIZER.\n\nDieser Text wurde von einem KI-Sicherheitsfilter blockiert. Schreibe den Text komplett klinisch, objektiv und jugendfrei um. Entferne ALLE potenziell anstößigen oder expliziten Wörter, bewahre aber den sachlichen Sinn für eine psychologische Analyse.\n\nTEXT:\n${text}\n\nBEREINIGTER TEXT:`;
           const response = await fetch("http://localhost:11434/api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              model: "llama3:latest",
+              model: "llama3.1:latest",
               prompt: prompt,
               stream: false
             })
           });
           if (response.ok) {
             const data = await response.json();
+            console.log(`[Llama3] Sanitization done.`);
             return data.response.trim();
           }
         } catch (e) {
@@ -2758,7 +3129,12 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
     // Merge consecutive messages of the same role to satisfy Gemini API requirements
     for (let i = 0; i < prevMessages.length; i++) {
       const msgRole = prevMessages[i].role === 'user' ? 'user' : 'model';
-      const msgText = prevMessages[i].content || '';
+      let msgText = prevMessages[i].content || '';
+      
+      // LAZY LOADING OPTIMIZATION: Truncate massive text blocks (like pasted PDFs) if they are older than the last 2 turns
+      if (i < prevMessages.length - 2 && msgText.length > 2000) {
+        msgText = msgText.substring(0, 1000) + `\n\n[SYSTEM-HINWEIS: Dieser Textabschnitt war sehr lang und wurde zur Optimierung der Ladezeiten und Token-Kosten eingekürzt. Die KI kennt die wichtigsten Punkte noch aus den vorherigen Antworten, hat hier aber nicht mehr den kompletten Originalwortlaut vorliegen.]`;
+      }
       
       if (history.length > 0 && history[history.length - 1].role === msgRole) {
         history[history.length - 1].parts[0].text += '\n\n' + msgText;
@@ -2775,9 +3151,23 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
       history.shift();
     }
 
-    let attemptCount = 0;
+      let attemptCount = 0;
     const maxAttempts = 2;
     let geminiResult = null;
+    
+    // DEBUG: Dump the payload to see what Gemini is actually receiving!
+    try {
+      const debugPayload = {
+        systemInstruction: systemInstructionText,
+        history: history,
+        messagePayload: messagePayload
+      };
+      fs.writeFileSync('data/debug_gemini_payload.json', JSON.stringify(debugPayload, null, 2));
+    } catch(e) {
+      console.error("Failed to write debug payload", e);
+    }
+
+    let currentPayload = messagePayload; // Declare outside loop so it persists and is available in catch block
 
     while (attemptCount < maxAttempts) {
       attemptCount++;
@@ -2803,7 +3193,6 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
         });
 
         const geminiChat = model.startChat({ history: history });
-        let currentPayload = messagePayload;
         let isFunctionTurn = false;
 
         // Send payload to model
@@ -2844,7 +3233,7 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
                     id: uuidv4(),
                     text: memText,
                     embedding,
-                    metadata: { source: call.args.source || 'Explizit gespeichert', timestamp: new Date().toISOString(), chatId: chat.id, explicit: true }
+                    metadata: { source: call.args.source || 'Explizit gespeichert', timestamp: new Date().toISOString(), chatId: chat.id, role: chat.role, explicit: true }
                   });
                   saveMemories(memories);
                   res.write(`data: ${JSON.stringify({ memorySaved: { content: call.args.content, source: call.args.source } })}\n\n`);
@@ -2876,6 +3265,20 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
                 });
                 const secondGeminiChat = textOnlyModel.startChat({ history: secondHistory });
                 const secondResult = await sendWithRetry(secondGeminiChat, combinedContext, 1, 2000);
+                
+                // Track tokens for this second turn
+                try {
+                  if (secondResult && secondResult.response) {
+                    const secResp = await secondResult.response;
+                    if (secResp.usageMetadata) {
+                      promptTokenCount += secResp.usageMetadata.promptTokenCount || 0;
+                      candidatesTokenCount += secResp.usageMetadata.candidatesTokenCount || 0;
+                    }
+                  }
+                } catch(metaErr) {
+                  console.warn("Failed to retrieve response usage metadata for second turn:", metaErr.message);
+                }
+
                 for await (const chunk2 of secondResult.stream) {
                   if (isAborted) break;
                   try {
@@ -2920,8 +3323,9 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
             }
           }
           
-          // Sanitize history
-          for (let h of history) {
+          // Sanitize history (only the last 2 messages to avoid infinite blocking on huge histories)
+          const historyToSanitize = history.slice(-2);
+          for (let h of historyToSanitize) {
             if (h.parts) {
               for (let part of h.parts) {
                 if (part.text) part.text = await sanitizeContentLocal(part.text);
@@ -3010,10 +3414,11 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
       })();
     }
 
-    // Auto-learn/index current exchange if requested
+    // Auto-learn/index current exchange if requested (Memory + Persona Auto-Tuning)
     if (autoLearn === 'true' && content && content.length > 20 && completeResponse.length > 20) {
       (async () => {
         try {
+          // 1. Vector Memory (Original)
           const memoryText = `Frage: ${content}\nAntwort: ${completeResponse}`;
           const embedding = await getEmbedding(memoryText, apiKey);
           const memories = getMemories();
@@ -3024,13 +3429,79 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
             metadata: {
               source: `Chat: ${chat.title}`,
               timestamp: new Date().toISOString(),
-              chatId: chat.id
+              chatId: chat.id,
+              role: chat.role
             }
           });
           saveMemories(memories);
-          console.log("Automatically learned new chat interaction.");
+          
+          // 2. Persona Auto-Tuning (Meta-Agent)
+          // Run this every ~5th message to avoid spamming the rules
+          if (chat.messages.length > 0 && chat.messages.length % 5 === 0) {
+            console.log("Starte asynchronen Persona Auto-Tuning Meta-Agent...");
+            const isTechnicalRole = ['it_expert', 'finanzen', 'steuerberater', 'kfz_meister'].includes(chat.role);
+            const recentMsgs = chat.messages.slice(-10).map(m => `${m.role}: ${m.content}`).join('\n');
+            
+            let currentRulesText = "";
+            if (fs.existsSync(DYNAMIC_RULES_FILE)) {
+               const r = JSON.parse(fs.readFileSync(DYNAMIC_RULES_FILE, 'utf8'));
+               if (isTechnicalRole) {
+                 currentRulesText = (r.roles && r.roles[chat.role] ? r.roles[chat.role] : []).join('\n');
+               } else {
+                 currentRulesText = (r.global || []).join('\n');
+               }
+            }
+            
+            let metaPrompt = "";
+            if (isTechnicalRole) {
+              metaPrompt = `Du bist ein analytischer Knowledge-Base-Agent (Wiki-Extraktor). Analysiere den folgenden Chat-Verlauf.
+Dein Ziel: Extrahiere harte Fakten, technische Besonderheiten, Abweichungen von offiziellen Handbüchern oder etablierte Architekturentscheidungen, die in diesem Gespräch herausgefunden wurden.
+Fokus: Wie funktioniert das System wirklich? Was war der Lösungsansatz?
+Aktuelle Wissensdatenbank (wiederhole nichts davon!):\n${currentRulesText}\n
+Chat-Verlauf:\n${recentMsgs}\n
+Wenn du eine WICHTIGE NEUE technische Erkenntnis oder einen Fakt gefunden hast, schreibe exakt 1-2 präzise Sätze als neuen Wiki-Eintrag.
+Wenn es nichts grundlegend Neues gibt oder der Chat nur Smalltalk war, antworte exakt mit 'NONE'.`;
+            } else {
+              metaPrompt = `Du bist ein psychologischer Profiling-Agent. Analysiere den folgenden Chat-Verlauf des Nutzers 'Aurel'.
+Dein Ziel: Finde EINE neue, entscheidende Verhaltensregel (Wie man mit ihm kommunizieren sollte, was er mag/nicht mag, wie er auf Stress reagiert), die im Chat deutlich wurde.
+Aktuelle bekannte Regeln (wiederhole nichts davon!):\n${currentRulesText}\n
+Chat-Verlauf:\n${recentMsgs}\n
+Wenn du eine WICHTIGE NEUE Erkenntnis hast, schreibe exakt 1-2 Sätze als neue Regel (Beginne z.B. mit 'Aurel...').
+Wenn es nichts grundlegend Neues gibt oder der Chat zu kurz ist, antworte exakt mit 'NONE'.`;
+            }
+
+            const metaModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+            const metaRes = await metaModel.generateContent(metaPrompt);
+            const newRule = metaRes.response.text().trim();
+            
+            if (newRule && newRule !== 'NONE' && !newRule.includes('NONE') && newRule.length > 10 && newRule.length < 400) {
+              console.log(`Meta-Agent hat neue Regel gelernt (${isTechnicalRole ? 'Wiki' : 'Psychologie'}):`, newRule);
+              if (fs.existsSync(DYNAMIC_RULES_FILE)) {
+                const rulesObj = JSON.parse(fs.readFileSync(DYNAMIC_RULES_FILE, 'utf8'));
+                
+                if (isTechnicalRole) {
+                  if (!rulesObj.roles) rulesObj.roles = {};
+                  if (!rulesObj.roles[chat.role]) rulesObj.roles[chat.role] = [];
+                  if (!rulesObj.roles[chat.role].some(r => r.includes(newRule.substring(0, 20)))) {
+                    rulesObj.roles[chat.role].push(newRule);
+                    if (rulesObj.roles[chat.role].length > 50) rulesObj.roles[chat.role] = rulesObj.roles[chat.role].slice(-50);
+                  }
+                } else {
+                  if (!rulesObj.global) rulesObj.global = [];
+                  if (!rulesObj.global.some(r => r.includes(newRule.substring(0, 20)))) {
+                    rulesObj.global.push(newRule);
+                    if (rulesObj.global.length > 50) rulesObj.global = rulesObj.global.slice(-50);
+                  }
+                }
+                
+                fs.writeFileSync(DYNAMIC_RULES_FILE, JSON.stringify(rulesObj, null, 2));
+              }
+            } else {
+              console.log("Meta-Agent: Keine neue Erkenntnis.");
+            }
+          }
         } catch (err) {
-          console.error("Auto-learning embedding failed:", err.message);
+          console.error("Auto-learning (Memory/Persona) failed:", err.message);
         }
       })();
     }
@@ -3052,10 +3523,14 @@ app.post('/api/chats/:id/message', upload.array('files'), async (req, res) => {
 });
 
 async function handleOpenAIStream(modelName, chat, systemInstructionText, res, isAborted, contextWindow) {
-  const apiKey = modelName.startsWith('moonshot-') ? process.env.MOONSHOT_API_KEY : process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error(`${modelName.startsWith('moonshot-') ? 'Moonshot' : 'OpenAI'} API Key fehlt in der .env-Datei.`);
+  const apiKey = modelName.startsWith('moonshot-') ? process.env.MOONSHOT_API_KEY 
+               : (modelName.startsWith('mistral-') || modelName.startsWith('open-mistral-')) ? process.env.MISTRAL_API_KEY 
+               : process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error(`${modelName.startsWith('moonshot-') ? 'Moonshot' : (modelName.startsWith('mistral-') || modelName.startsWith('open-mistral-')) ? 'Mistral' : 'OpenAI'} API Key fehlt in der .env-Datei.`);
   
-  const baseURL = modelName.startsWith('moonshot-') ? 'https://api.moonshot.cn/v1' : undefined;
+  const baseURL = modelName.startsWith('moonshot-') ? 'https://api.moonshot.cn/v1' 
+                : (modelName.startsWith('mistral-') || modelName.startsWith('open-mistral-')) ? 'https://api.mistral.ai/v1' 
+                : undefined;
   const openai = new OpenAI({ apiKey, baseURL });
   
   const messages = [{ role: 'system', content: systemInstructionText }];
@@ -3092,6 +3567,12 @@ async function handleOpenAIStream(modelName, chat, systemInstructionText, res, i
       res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
     }
   }
+
+  if (promptTokens === 0) {
+    promptTokens = Math.ceil(JSON.stringify(messages).length / 4);
+    completionTokens = Math.ceil(completeResponse.length / 4);
+  }
+
   return { completeResponse, promptTokens, completionTokens };
 }
 
@@ -3201,6 +3682,21 @@ app.post('/api/export/docx', express.json(), async (req, res) => {
   } catch (error) {
     console.error("Export error:", error);
     res.status(500).json({ error: "Fehler beim Exportieren des Dokuments." });
+  }
+});
+
+// --- Levers API ---
+app.get('/api/levers', (req, res) => {
+  try {
+    if (fs.existsSync(LEVERS_FILE)) {
+      const leversData = JSON.parse(fs.readFileSync(LEVERS_FILE, 'utf8'));
+      res.json(leversData);
+    } else {
+      res.json({ levers: [], lastUpdated: null });
+    }
+  } catch (error) {
+    console.error('Fehler beim Laden der Hebel:', error);
+    res.status(500).json({ error: 'Failed to load levers' });
   }
 });
 

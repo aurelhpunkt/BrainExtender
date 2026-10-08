@@ -5,8 +5,8 @@ const chatList = data.chats || [];
 const coachChat = chatList.find(c => c.role === 'beziehung');
 
 if (coachChat && coachChat.messages) {
-    const msgs = coachChat.messages.slice(-20);
-    let out = "--- Beziehungs-Coach Chat (Letzte 20) ---\n\n";
+    const msgs = coachChat.messages.slice(-30);
+    let out = "--- Beziehungs-Coach Chat (Letzte 30) ---\n\n";
     msgs.forEach(m => {
         out += `[${m.timestamp}] ${m.role.toUpperCase()}:\n${m.content}\n\n`;
     });

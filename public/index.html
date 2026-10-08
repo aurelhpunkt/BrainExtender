@@ -21,18 +21,32 @@
   
   <!-- Chart.js for Dashboard -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- FullCalendar.js -->
+  <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js'></script>
 </head>
 <body>
 
   <div class="app-container">
     
+    <!-- BRANDING (Always visible) -->
+    <div class="main-branding" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+      <div class="logo">
+        <i class="fa-solid fa-brain logo-icon"></i>
+        <h1>BrainExtender</h1>
+      </div>
+      <div id="calendar-traffic-light" class="traffic-light status-green" title="Zeitplan wird berechnet..." style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 10px; border-radius: 20px; background: rgba(0,0,0,0.2);">
+        <i class="fa-solid fa-traffic-light"></i>
+        <span id="calendar-traffic-text" style="font-size: 12px; font-weight: 600;">Status laden...</span>
+      </div>
+    </div>
+    
     <!-- SIDEBAR -->
     <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          <i class="fa-solid fa-brain logo-icon"></i>
-          <h1>BrainExtender</h1>
-        </div>
+      <div class="sidebar-header" style="display: flex; justify-content: flex-end; align-items: center; height: 28px;">
+        <button id="btn-pin-sidebar" class="btn-icon" title="Sidebar anheften" style="color: var(--color-text-muted); transition: all 0.2s;">
+          <i class="fa-solid fa-thumbtack"></i>
+        </button>
       </div>
       
       <button class="btn btn-primary btn-new-chat" id="btn-new-chat" style="margin-bottom: 0.5rem;">
@@ -40,6 +54,9 @@
       </button>
       <button class="btn btn-secondary btn-dashboard" id="btn-dashboard">
         <i class="fa-solid fa-chart-pie"></i> Dashboard
+      </button>
+      <button class="btn btn-secondary btn-calendar" id="btn-calendar" style="margin-top: 0.5rem; background: transparent; border: 1px solid hsla(0,0%,100%,0.1); color: var(--color-text);">
+        <i class="fa-solid fa-calendar-days"></i> Zeitmanagement
       </button>
       
       <div class="chats-list-container">
@@ -68,6 +85,10 @@
         <button class="footer-btn" id="btn-open-memory" title="Langzeitgedächtnis verwalten">
           <i class="fa-solid fa-memory"></i>
           <span>Gedächtnis</span>
+        </button>
+        <button class="footer-btn" id="btn-open-manuals" title="IT-Handbücher verwalten">
+          <i class="fa-solid fa-book"></i>
+          <span>Handbücher</span>
         </button>
         <button class="footer-btn" id="btn-open-import" title="Chats importieren">
           <i class="fa-solid fa-file-import"></i>
@@ -142,6 +163,22 @@
               <!-- Dynamically populated -->
             </ul>
           </div>
+          
+          <!-- 80/20 Levers -->
+          <div class="dashboard-card card-levers">
+            <h3><i class="fa-solid fa-bolt"></i> 80/20 Hebel (Top Prioritäten)</h3>
+            <ul class="insights-list" id="dashboard-levers">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+
+          <!-- Progressions / KPIs -->
+          <div class="dashboard-card card-progressions">
+            <h3><i class="fa-solid fa-chart-line"></i> Trend-Analyse & KPIs (Zeitachse)</h3>
+            <ul class="insights-list" id="dashboard-progressions">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
         </div>
 
         <!-- CEO Boardroom -->
@@ -164,13 +201,49 @@
           </div>
         </div>
       </section>
+      <!-- CALENDAR STATE -->
+      <section class="workspace-state" id="state-calendar" style="display: none;">
+        <div class="dashboard-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+          <div>
+            <h2>Intelligentes Zeitmanagement</h2>
+            <p>Dein Energy & Load Management System</p>
+          </div>
+          <button id="btn-optimize-calendar" class="btn btn-primary">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> KI-Synergie Optimierung
+          </button>
+        </div>
+        
+        <div class="calendar-grid" style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 20px; height: calc(100vh - 150px);">
+          <!-- Left: FullCalendar -->
+          <div class="dashboard-card" style="height: 100%; overflow: auto; padding: 15px;">
+            <div id="smart-calendar" style="height: 100%;"></div>
+          </div>
+          
+          <!-- Right: Load Curve & Suggestions -->
+          <div style="display: flex; flex-direction: column; gap: 20px; height: 100%;">
+            <div class="dashboard-card" style="flex: 1; min-height: 250px;">
+              <h3><i class="fa-solid fa-chart-area"></i> Load & Energy Chart</h3>
+              <div class="chart-container" style="height: calc(100% - 40px);">
+                <canvas id="calendarLoadChart"></canvas>
+              </div>
+            </div>
+            
+            <div class="dashboard-card" style="flex: 1; overflow: auto;">
+              <h3><i class="fa-solid fa-lightbulb"></i> KI-Synergie Vorschläge</h3>
+              <ul class="insights-list" id="calendar-ai-suggestions">
+                <li class="insight-item"><i class="fa-solid fa-spinner fa-spin"></i> Warte auf Optimierungs-Lauf...</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <!-- CONFIGURATION STATE (NEW CHAT SETUP) -->
       <section class="workspace-state active" id="state-welcome">
         <div class="welcome-cost-wrapper">
           <div class="cost-badge" id="welcome-cost-display" title="Gesamte API-Kosten in AI Studio (kumuliert)">
             <i class="fa-solid fa-wallet cost-icon"></i>
-            <span>Kosten: $<span id="welcome-cost-value">0.0000</span></span>
+            <span>Kosten: €<span id="welcome-cost-value">0.0000</span></span>
           </div>
         </div>
         <div class="welcome-container">
@@ -222,11 +295,18 @@
             </div>
             <!-- 3. KI-Modell Selector -->
             <div class="setup-section">
-              <h4>3. KI-Modell</h4>
-              <div class="form-group" style="max-width: 350px;">
-                <select id="chat-model-select" class="text-input" style="padding: 10px 14px; background-color: var(--color-bg-input);">
-                  <!-- Dynamically populated by JS -->
-                </select>
+              <h4>3. KI-Modell & Handbücher</h4>
+              <div style="display: flex; gap: 10px;">
+                <div class="form-group" style="flex: 1;">
+                  <select id="chat-model-select" class="text-input" style="padding: 10px 14px; background-color: var(--color-bg-input);">
+                    <!-- Dynamically populated by JS -->
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <select id="chat-manuals-select" class="text-input" multiple title="Handbücher auswählen (Strg/Cmd zum Mehrfachwählen)" style="padding: 10px; background-color: var(--color-bg-input);">
+                    <!-- Dynamically populated -->
+                  </select>
+                </div>
               </div>
             </div>
             
@@ -252,6 +332,9 @@
               <select id="badge-model" class="model-select-badge">
                 <!-- Dynamically populated by JS -->
               </select>
+              <select id="header-manuals-select" class="model-select-badge" multiple title="Aktive Handbücher (wird beim Senden gespeichert)">
+                <!-- Dynamically populated by JS -->
+              </select>
             </div>
           </div>
           <div class="chat-header-actions">
@@ -260,7 +343,7 @@
             </button>
             <div class="cost-badge" id="cost-display" title="Gesamte API-Kosten in AI Studio (kumuliert)">
               <i class="fa-solid fa-wallet cost-icon"></i>
-              <span>Kosten: $<span id="cost-value">0.0000</span></span>
+              <span>Kosten: €<span id="cost-value">0.0000</span></span>
             </div>
             <button class="btn-icon" id="btn-delete-chat" title="Chat löschen">
               <i class="fa-solid fa-trash-can"></i>
@@ -446,6 +529,40 @@
           <i class="fa-solid fa-ghost"></i>
           <p>Noch keine Erinnerungen gespeichert oder gefunden.</p>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- HANDBÜCHER MODAL -->
+  <dialog class="modal-dialog modal-large" id="modal-manuals">
+    <div class="modal-header">
+      <h2><i class="fa-solid fa-book"></i> Handbücher (IT-Experte)</h2>
+      <button class="btn-close-modal" id="btn-close-manuals">&times;</button>
+    </div>
+    <div class="modal-body flex-column">
+      <div class="memory-controls" style="margin-bottom: 1rem; display: flex; gap: 10px;">
+        <input type="file" id="manual-upload-input" accept=".txt,.md,.pdf,.docx" style="display: none;">
+        <button class="btn btn-primary" id="btn-upload-manual">
+          <i class="fa-solid fa-upload"></i> Handbuch hochladen
+        </button>
+        <button class="btn btn-secondary" id="btn-refresh-manuals">
+          <i class="fa-solid fa-rotate-right"></i> Aktualisieren
+        </button>
+      </div>
+      <div class="memory-list-container">
+        <table class="memory-table">
+          <thead>
+            <tr>
+              <th>Dateiname</th>
+              <th>Größe</th>
+              <th>Hochgeladen am</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody id="manuals-table-body">
+            <!-- Dynamisch -->
+          </tbody>
+        </table>
       </div>
     </div>
   </dialog>
@@ -660,5 +777,6 @@
   
   <!-- App JS -->
   <script src="app.js"></script>
+  <script src="calendar.js"></script>
 </body>
 </html>
